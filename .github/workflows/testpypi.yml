@@ -1,0 +1,96 @@
+name: Publish to TestPyPI
+
+on:
+  # Manual trigger
+  workflow_dispatch:
+    inputs:
+      version_suffix:
+        description: 'Dev version suffix (e.g., dev0, rc1)'
+        required: true
+        default: 'dev0'
+
+  # Optionally trigger on pushes to specific branches
+  # Uncomment to enable
+  # push:
+  #   branches:
+  #     - 'staging'
+  #     - 'release/*'
+
+jobs:
+  build_and_publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Install UV
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install tomli tomli-w
+
+      # Use dynamic versioning with the provided suffix
+      - name: Prepare version
+        id: prepare-version
+        run: |
+          # Use tomli to read and update the version
+          cat > update_version.py << 'EOL'
+          import tomli
+          import tomli_w
+          import sys
+          import os
+
+          # Get suffix from command line
+          suffix = sys.argv[1] if len(sys.argv) > 1 else "dev0"
+
+          # Read pyproject.toml
+          with open("pyproject.toml", "rb") as f:
+              data = tomli.load(f)
+
+          # Get current version
+          base_version = data["project"]["version"]
+          print(f"Base version detected: {base_version}")
+
+          # Create new version with suffix
+          new_version = f"{base_version}.{suffix}"
+          print(f"New version: {new_version}")
+
+          # Update version
+          data["project"]["version"] = new_version
+
+          # Write updated data back
+          with open("pyproject.toml", "wb") as f:
+              tomli_w.dump(data, f)
+
+          # Output for GitHub Actions
+          with open(os.environ['GITHUB_ENV'], 'a') as env_file:
+              env_file.write(f"VERSION={new_version}\n")
+          EOL
+
+          # Execute the Python script with the suffix
+          DEV_SUFFIX="${{ github.event.inputs.version_suffix }}"
+          if [ -n "$DEV_SUFFIX" ]; then
+            python update_version.py "$DEV_SUFFIX"
+          else
+            # For automatic triggers, use the short commit SHA
+            SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+            python update_version.py "dev${SHORT_SHA}"
+          fi
+
+      - name: Build package
+        run: make build
+
+      - name: Publish to TestPyPI
+        run: |
+          uv publish \
+            --token ${{ secrets.TEST_PYPI_API_TOKEN }} \
+            --publish-url https://test.pypi.org/legacy/ \
+            --no-verify-ssl

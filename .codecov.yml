@@ -1,0 +1,62 @@
+# .codecov.yml - Codecov configuration for dbt-correlator
+# Codecov.io test coverage reporting configuration
+# Reference: https://docs.codecov.io/docs/codecov-yaml
+
+codecov:
+  require_ci_to_pass: yes
+  notify:
+    after_n_builds: 5  # Wait for all Python versions to report (3.9, 3.10, 3.11, 3.12, 3.13)
+    wait_for_ci: true
+
+coverage:
+  precision: 2
+  round: down
+  range: "80...100"
+  
+  status:
+    # Project-wide coverage requirements
+    project:
+      default:
+        target: 90%           # Target 90% coverage (per session context requirements)
+        threshold: 1%         # Allow 1% drop
+        base: auto
+        only_pulls: true      # Only use in PRs
+        informational: false  # Block PR if fails
+    
+    # Coverage for new code in patches/PRs
+    patch:
+      default:
+        target: 100%          # New code should have 100% coverage
+        threshold: 1%         # Allow 1% wiggle room
+        base: auto
+        only_pulls: true      # Only use in PRs
+        informational: false  # Block PR if fails
+    
+    changes: yes              # Block if coverage on changed files decreases
+
+parsers:
+  gcov:
+    branch_detection:
+      conditional: yes
+      loop: yes
+      method: no
+      macro: no
+
+comment:
+  layout: "reach,diff,flags,files,footer"
+  behavior: default
+  require_changes: false      # Post comment even if coverage doesn't change
+  require_base: true          # Require base branch coverage
+  require_head: true          # Require head branch coverage
+  after_n_builds: 5           # Wait for all Python versions before commenting
+
+github_checks:
+  annotations: true           # Add annotations to the PR
+
+# Ignore paths for coverage calculation
+ignore:
+  - "tests/**/*"              # Test files
+  - "docs/**/*"               # Documentation
+  - "tests/fixtures/**/*"     # Test fixture data
+  - "src/dbt_correlator/__init__.py"  # Package init (version export only)
+
