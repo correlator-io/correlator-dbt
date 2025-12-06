@@ -1,0 +1,86 @@
+name: Pull Request Checks
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  commit-message:
+    name: Commit Message Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Fetch Branches
+        run: |
+          git fetch origin ${{ github.base_ref }}:${{ github.base_ref }}
+          git fetch origin ${{ github.head_ref }}:${{ github.head_ref }}
+          git branch
+
+      - name: Check Commit Messages
+        run: |
+          # Skip the check for Dependabot PRs
+          if [[ "${{ github.actor }}" == "dependabot[bot]" ]]; then
+            echo "Dependabot PR detected. Skipping commit message check."
+            exit 0
+          fi
+
+          echo "Checking commit messages..."
+          echo "Base branch: ${{ github.base_ref }}"
+          echo "Head branch: ${{ github.head_ref }}"
+          
+          # Get all commits in the PR
+          commits=$(git log origin/${{ github.base_ref }}..origin/${{ github.head_ref }} --pretty="%s")
+          
+          if [ -z "$commits" ]; then
+            echo "::error::No commits found between the branches. Something went wrong."
+            exit 1
+          fi
+          
+          echo "Found commits:"
+          echo "$commits"
+          echo "------------------------"
+          
+          # Check each commit
+          echo "$commits" | while read commit_msg; do
+            if ! [[ "$commit_msg" =~ ^(minor|major|patch|chore)(\(.+\))?:\ .+ ]]; then
+              echo "::error::Commit message does not follow the convention: '$commit_msg'"
+              echo "Expected format: type(scope): message"
+              echo "Types: minor, major, patch, chore"
+              echo "Example: minor: Add dataset filtering feature"
+              exit 1
+            fi
+          done
+          
+          if [ $? -ne 0 ]; then
+            exit 1
+          fi
+          
+          echo "All commit messages follow the convention. Great!"
+
+  pr-title:
+    name: Pull Request Title Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR Title
+        run: |
+          # Skip the check for Dependabot PRs
+          if [[ "${{ github.actor }}" == "dependabot[bot]" ]]; then
+            echo "Dependabot PR detected. Skipping PR title check."
+            exit 0
+          fi
+
+          pr_title="${{ github.event.pull_request.title }}"
+          echo "PR Title: $pr_title"
+          
+          if ! [[ "$pr_title" =~ ^(minor|major|patch|chore)(\(.+\))?:\ .+ ]]; then
+            echo "::error::PR title does not follow the convention: '$pr_title'"
+            echo "Expected format: type(scope): message"
+            echo "Types: minor, major, patch, chore"
+            echo "Example: minor: Add dataset filtering feature"
+            exit 1
+          else
+            echo "PR title follows the convention. Nice work!"
+          fi
