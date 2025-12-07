@@ -1,13 +1,12 @@
-# pyproject.toml for dbt-correlator
-# Python package configuration using UV package manager
-
 [build-system]
-requires = ["hatchling"]
+requires = [
+    "hatchling",
+]
 build-backend = "hatchling.build"
 
 [project]
 name = "correlator-dbt"
-version = "0.0.0"
+version = "0.0.1"
 description = "dbt plugin that emits OpenLineage events with test results for automated incident correlation"
 readme = "README.md"
 authors = [
@@ -73,13 +72,15 @@ Homepage = "https://github.com/correlator-io/correlator-dbt"
 Repository = "https://github.com/correlator-io/correlator-dbt"
 Documentation = "https://github.com/correlator-io/correlator-dbt#readme"
 "Bug Tracker" = "https://github.com/correlator-io/correlator-dbt/issues"
-"Correlator" = "https://github.com/correlator-io/correlator"
+Correlator = "https://github.com/correlator-io/correlator"
 
 [project.scripts]
 dbt-correlator = "dbt_correlator.cli:cli"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/dbt_correlator"]
+packages = [
+    "src/dbt_correlator",
+]
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -89,29 +90,18 @@ include = [
     "/LICENSE",
 ]
 
-# Black code formatter configuration
 [tool.black]
 line-length = 88
-target-version = ["py39", "py310", "py311", "py312", "py313"]
+target-version = [
+    "py39",
+    "py310",
+    "py311",
+    "py312",
+    "py313",
+]
 include = "\\.pyi?$"
-exclude = '''
-/(
-    \.eggs
-  | \.git
-  | \.hg
-  | \.mypy_cache
-  | \.tox
-  | \.venv
-  | _build
-  | buck-out
-  | build
-  | dist
-  | venv
-  | tests/fixtures
-)/
-'''
+exclude = "/(\n    \\.eggs\n  | \\.git\n  | \\.hg\n  | \\.mypy_cache\n  | \\.tox\n  | \\.venv\n  | _build\n  | buck-out\n  | build\n  | dist\n  | venv\n  | tests/fixtures\n)/\n"
 
-# isort import sorting configuration
 [tool.isort]
 profile = "black"
 line_length = 88
@@ -120,47 +110,51 @@ include_trailing_comma = true
 force_grid_wrap = 0
 use_parentheses = true
 ensure_newline_before_comments = true
-src_paths = ["src", "tests"]
+src_paths = [
+    "src",
+    "tests",
+]
 
-# Ruff linting configuration
 [tool.ruff]
 line-length = 88
 target-version = "py39"
-src = ["src", "tests"]
+src = [
+    "src",
+    "tests",
+]
 
 [tool.ruff.lint]
 select = [
-    "E",      # pycodestyle errors
-    "W",      # pycodestyle warnings
-    "F",      # pyflakes
-    "I",      # isort
-    "B",      # flake8-bugbear
-    "C4",     # flake8-comprehensions
-    "UP",     # pyupgrade
-    "ARG",    # flake8-unused-arguments
-    "SIM",    # flake8-simplify
-    "PT",     # flake8-pytest-style
-    "RET",    # flake8-return
-    "PL",     # pylint
-    "RUF",    # ruff-specific rules
+    "E",
+    "W",
+    "F",
+    "I",
+    "B",
+    "C4",
+    "UP",
+    "ARG",
+    "SIM",
+    "PT",
+    "RET",
+    "PL",
+    "RUF",
 ]
 ignore = [
-    "E501",   # line too long (handled by black)
-    "PLR0913", # too many arguments
-    "PLR2004", # magic value used in comparison
+    "E501",
+    "PLR0913",
+    "PLR2004",
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = [
-    "S101",   # assert allowed in tests
-    "ARG",    # unused arguments in fixtures
-    "PLR2004", # magic values in tests
+    "S101",
+    "ARG",
+    "PLR2004",
 ]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
-# Mypy type checking configuration
 [tool.mypy]
 python_version = "3.9"
 warn_return_any = true
@@ -168,7 +162,7 @@ warn_unused_configs = true
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
 check_untyped_defs = true
-disallow_untyped_decorators = false  # Click decorators are untyped
+disallow_untyped_decorators = false
 no_implicit_optional = true
 strict_optional = true
 warn_redundant_casts = true
@@ -177,19 +171,16 @@ warn_no_return = true
 warn_unreachable = true
 strict_equality = true
 show_error_codes = true
+overrides = [
+    { module = "tests.*", disallow_untyped_defs = false },
+    { module = "openlineage.*", ignore_missing_imports = true },
+]
 
-[[tool.mypy.overrides]]
-module = "tests.*"
-disallow_untyped_defs = false
-
-[[tool.mypy.overrides]]
-module = "openlineage.*"
-ignore_missing_imports = true
-
-# Pytest configuration
 [tool.pytest.ini_options]
 minversion = "7.0"
-testpaths = ["tests"]
+testpaths = [
+    "tests",
+]
 python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
@@ -208,17 +199,17 @@ markers = [
     "slow: Slow running tests",
 ]
 
-# Coverage configuration
-# Based on best practices from https://github.com/kasulani/etracer/blob/main/.coveragerc
 [tool.coverage.run]
-source = ["src/dbt_correlator"]
+source = [
+    "src/dbt_correlator",
+]
 branch = true
 omit = [
     "*/tests/*",
     "*/site-packages/*",
     "*/__pycache__/*",
     "*/.venv/*",
-    "*/interfaces.py",  # Interface/protocol definitions
+    "*/interfaces.py",
 ]
 
 [tool.coverage.report]
@@ -226,31 +217,20 @@ precision = 2
 show_missing = true
 skip_covered = false
 exclude_lines = [
-    # Skip abstract/interface method definitions
     "pass",
     "raise NotImplementedError",
     "@abstractmethod",
     "def __repr__",
     "def __str__",
-    
-    # Skip defensive code (pragmas, debug-only code)
     "pragma: no cover",
     "def __debug__",
     "if self\\.debug",
-    
-    # Skip unimplemented/abstract methods
     "raise AssertionError",
-    
-    # Skip branches that can't be covered easily
     "except ImportError",
     "except Exception as e:",
     "warn\\(",
-    
-    # Skip platform-specific code
     "if sys\\.platform ==",
     "if platform\\.",
-    
-    # Skip unreachable exit points
     "if __name__ == .__main__.:",
     "if TYPE_CHECKING:",
 ]
@@ -258,7 +238,11 @@ exclude_lines = [
 [tool.coverage.html]
 directory = "htmlcov"
 
-# Bandit security linting configuration
 [tool.bandit]
-exclude_dirs = ["tests", "docs"]
-skips = ["B101"]  # Skip assert_used (we use asserts in tests)
+exclude_dirs = [
+    "tests",
+    "docs",
+]
+skips = [
+    "B101",
+]
