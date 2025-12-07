@@ -92,5 +92,4 @@ jobs:
         run: |
           uv publish \
             --token ${{ secrets.TEST_PYPI_API_TOKEN }} \
-            --publish-url https://test.pypi.org/legacy/ \
-            --no-verify-ssl
+            --publish-url https://test.pypi.org/legacy/
