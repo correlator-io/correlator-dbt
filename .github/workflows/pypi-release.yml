@@ -5,6 +5,10 @@ on:
     types:
       - closed
 
+permissions:
+  contents: write        # Required to push commits, tags, and create releases
+  pull-requests: read    # Required to read PR information
+
 jobs:
   check_version:
     name: Determine Next Version
