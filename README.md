@@ -3,6 +3,7 @@
 **Accelerate dbt incident resolution with automated correlation**
 
 [![PyPI version](https://img.shields.io/pypi/v/correlator-dbt.svg)](https://pypi.org/project/correlator-dbt/)
+[![codecov](https://codecov.io/github/correlator-io/correlator-dbt/graph/badge.svg?token=Z09DP971EU)](https://codecov.io/github/correlator-io/correlator-dbt)
 [![Python Version](https://img.shields.io/pypi/pyversions/correlator-dbt.svg)](https://pypi.org/project/correlator-dbt/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
