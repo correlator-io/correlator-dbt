@@ -1,0 +1,880 @@
+{
+  "metadata": {
+    "dbt_schema_version": "https://schemas.getdbt.com/dbt/run-results/v6.json",
+    "dbt_version": "1.10.15",
+    "generated_at": "2025-12-09T18:34:51.064443Z",
+    "invocation_id": "1e651364-45a1-4a76-9f21-4b69fa49a65f",
+    "invocation_started_at": "2025-12-09T18:34:50.326220Z",
+    "env": {}
+  },
+  "results": [
+    {
+      "status": "pass",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-09T18:34:50.797230Z",
+          "completed_at": "2025-12-09T18:34:50.802052Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-09T18:34:50.810167Z",
+          "completed_at": "2025-12-09T18:34:50.817435Z"
+        }
+      ],
+      "thread_id": "Thread-1 (worker)",
+      "execution_time": 0.030359268188476562,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": null,
+      "failures": 0,
+      "unique_id": "test.jaffle_shop.accepted_values_customers_customer_type__new__returning.d12f0947c8",
+      "compiled": true,
+      "compiled_code": "\n    \n    \n\nwith all_values as (\n\n    select\n        customer_type as value_field,\n        count(*) as n_records\n\n    from \"jaffle_shop\".\"main\".\"customers\"\n    group by customer_type\n\n)\n\nselect *\nfrom all_values\nwhere value_field not in (\n    'new','returning'\n)\n\n\n",
+      "relation_name": null,
+      "batch_results": null
+    },
+    {
+      "status": "pass",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-09T18:34:50.799941Z",
+          "completed_at": "2025-12-09T18:34:50.801917Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-09T18:34:50.807937Z",
+          "completed_at": "2025-12-09T18:34:50.819377Z"
+        }
+      ],
+      "thread_id": "Thread-2 (worker)",
+      "execution_time": 0.03377795219421387,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": null,
+      "failures": 0,
+      "unique_id": "test.jaffle_shop.dbt_utils_expression_is_true_customers_lifetime_spend_pretax_lifetime_tax_paid_lifetime_spend.ad37c989b6",
+      "compiled": true,
+      "compiled_code": "\n\n\n\nselect\n    1\nfrom \"jaffle_shop\".\"main\".\"customers\"\n\nwhere not(lifetime_spend_pretax + lifetime_tax_paid = lifetime_spend)\n\n",
+      "relation_name": null,
+      "batch_results": null
+    },
+    {
+      "status": "pass",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-09T18:34:50.795696Z",
+          "completed_at": "2025-12-09T18:34:50.801758Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-09T18:34:50.802168Z",
+          "completed_at": "2025-12-09T18:34:50.819881Z"
+        }
+      ],
+      "thread_id": "Thread-3 (worker)",
+      "execution_time": 0.034294843673706055,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": null,
+      "failures": 0,
+      "unique_id": "test.jaffle_shop.dbt_utils_expression_is_true_orders_order_items_subtotal_subtotal.b1416e07ec",
+      "compiled": true,
+      "compiled_code": "\n\n\n\nselect\n    1\nfrom \"jaffle_shop\".\"main\".\"orders\"\n\nwhere not(order_items_subtotal = subtotal)\n\n",
+      "relation_name": null,
+      "batch_results": null
+    },
+    {
+      "status": "pass",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-09T18:34:50.788957Z",
+          "completed_at": "2025-12-09T18:34:50.807798Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-09T18:34:50.810876Z",
+          "completed_at": "2025-12-09T18:34:50.820393Z"
+        }
+      ],
+      "thread_id": "Thread-4 (worker)",
+      "execution_time": 0.03464984893798828,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": null,
+      "failures": 0,
+      "unique_id": "test.jaffle_shop.dbt_utils_expression_is_true_orders_order_total_subtotal_tax_paid.2aba85df92",
+      "compiled": true,
+      "compiled_code": "\n\n\n\nselect\n    1\nfrom \"jaffle_shop\".\"main\".\"orders\"\n\nwhere not(order_total = subtotal + tax_paid)\n\n",
+      "relation_name": null,
+      "batch_results": null
+    },
+    {
+      "status": "pass",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-09T18:34:50.823303Z",
+          "completed_at": "2025-12-09T18:34:50.826660Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-09T18:34:50.827158Z",
+          "completed_at": "2025-12-09T18:34:50.840390Z"
+        }
+      ],
+      "thread_id": "Thread-1 (worker)",
+      "execution_time": 0.020882844924926758,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": null,
+      "failures": 0,
+      "unique_id": "test.jaffle_shop.dbt_utils_expression_is_true_stg_orders_order_total_tax_paid_subtotal.bfb885d7fc",
+      "compiled": true,
+      "compiled_code": "\n\n\n\nselect\n    1\nfrom \"jaffle_shop\".\"main\".\"stg_orders\"\n\nwhere not(order_total - tax_paid = subtotal)\n\n",
+      "relation_name": null,
+      "batch_results": null
+    },
+    {
+      "status": "pass",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-09T18:34:50.831646Z",
+          "completed_at": "2025-12-09T18:34:50.834023Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-09T18:34:50.835260Z",
+          "completed_at": "2025-12-09T18:34:50.841834Z"
+        }
+      ],
+      "thread_id": "Thread-4 (worker)",
+      "execution_time": 0.017744779586791992,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": null,
+      "failures": 0,
+      "unique_id": "test.jaffle_shop.not_null_orders_order_id.cf6c17daed",
+      "compiled": true,
+      "compiled_code": "\n    \n    \n\n\n\nselect order_id\nfrom \"jaffle_shop\".\"main\".\"orders\"\nwhere order_id is null\n\n\n",
+      "relation_name": null,
+      "batch_results": null
+    },
+    {
+      "status": "pass",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-09T18:34:50.830448Z",
+          "completed_at": "2025-12-09T18:34:50.833784Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-09T18:34:50.834331Z",
+          "completed_at": "2025-12-09T18:34:50.843321Z"
+        }
+      ],
+      "thread_id": "Thread-3 (worker)",
+      "execution_time": 0.019251108169555664,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": null,
+      "failures": 0,
+      "unique_id": "test.jaffle_shop.not_null_order_items_order_item_id.c6fda366bd",
+      "compiled": true,
+      "compiled_code": "\n    \n    \n\n\n\nselect order_item_id\nfrom \"jaffle_shop\".\"main\".\"order_items\"\nwhere order_item_id is null\n\n\n",
+      "relation_name": null,
+      "batch_results": null
+    },
+    {
+      "status": "pass",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-09T18:34:50.828215Z",
+          "completed_at": "2025-12-09T18:34:50.834189Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-09T18:34:50.836350Z",
+          "completed_at": "2025-12-09T18:34:50.844752Z"
+        }
+      ],
+      "thread_id": "Thread-2 (worker)",
+      "execution_time": 0.020534038543701172,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": null,
+      "failures": 0,
+      "unique_id": "test.jaffle_shop.not_null_customers_customer_id.5c9bf9911d",
+      "compiled": true,
+      "compiled_code": "\n    \n    \n\n\n\nselect customer_id\nfrom \"jaffle_shop\".\"main\".\"customers\"\nwhere customer_id is null\n\n\n",
+      "relation_name": null,
+      "batch_results": null
+    },
+    {
+      "status": "pass",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-09T18:34:50.847581Z",
+          "completed_at": "2025-12-09T18:34:50.853059Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-09T18:34:50.854542Z",
+          "completed_at": "2025-12-09T18:34:50.862901Z"
+        }
+      ],
+      "thread_id": "Thread-1 (worker)",
+      "execution_time": 0.018752098083496094,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": null,
+      "failures": 0,
+      "unique_id": "test.jaffle_shop.not_null_stg_customers_customer_id.e2cfb1f9aa",
+      "compiled": true,
+      "compiled_code": "\n    \n    \n\n\n\nselect customer_id\nfrom \"jaffle_shop\".\"main\".\"stg_customers\"\nwhere customer_id is null\n\n\n",
+      "relation_name": null,
+      "batch_results": null
+    },
+    {
+      "status": "pass",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-09T18:34:50.851421Z",
+          "completed_at": "2025-12-09T18:34:50.856516Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-09T18:34:50.856816Z",
+          "completed_at": "2025-12-09T18:34:50.864278Z"
+        }
+      ],
+      "thread_id": "Thread-3 (worker)",
+      "execution_time": 0.016464710235595703,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": null,
+      "failures": 0,
+      "unique_id": "test.jaffle_shop.not_null_stg_order_items_order_id.2063801f96",
+      "compiled": true,
+      "compiled_code": "\n    \n    \n\n\n\nselect order_id\nfrom \"jaffle_shop\".\"main\".\"stg_order_items\"\nwhere order_id is null\n\n\n",
+      "relation_name": null,
+      "batch_results": null
+    },
+    {
+      "status": "pass",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-09T18:34:50.853213Z",
+          "completed_at": "2025-12-09T18:34:50.856664Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-09T18:34:50.857755Z",
+          "completed_at": "2025-12-09T18:34:50.865744Z"
+        }
+      ],
+      "thread_id": "Thread-2 (worker)",
+      "execution_time": 0.016794204711914062,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": null,
+      "failures": 0,
+      "unique_id": "test.jaffle_shop.not_null_stg_order_items_order_item_id.26a7e2bc35",
+      "compiled": true,
+      "compiled_code": "\n    \n    \n\n\n\nselect order_item_id\nfrom \"jaffle_shop\".\"main\".\"stg_order_items\"\nwhere order_item_id is null\n\n\n",
+      "relation_name": null,
+      "batch_results": null
+    },
+    {
+      "status": "pass",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-09T18:34:50.849691Z",
+          "completed_at": "2025-12-09T18:34:50.854403Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-09T18:34:50.855622Z",
+          "completed_at": "2025-12-09T18:34:50.866419Z"
+        }
+      ],
+      "thread_id": "Thread-4 (worker)",
+      "execution_time": 0.021310806274414062,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": null,
+      "failures": 0,
+      "unique_id": "test.jaffle_shop.not_null_stg_locations_location_id.3d237927d2",
+      "compiled": true,
+      "compiled_code": "\n    \n    \n\n\n\nselect location_id\nfrom \"jaffle_shop\".\"main\".\"stg_locations\"\nwhere location_id is null\n\n\n",
+      "relation_name": null,
+      "batch_results": null
+    },
+    {
+      "status": "pass",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-09T18:34:50.872119Z",
+          "completed_at": "2025-12-09T18:34:50.880434Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-09T18:34:50.881349Z",
+          "completed_at": "2025-12-09T18:34:50.888867Z"
+        }
+      ],
+      "thread_id": "Thread-3 (worker)",
+      "execution_time": 0.021911144256591797,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": null,
+      "failures": 0,
+      "unique_id": "test.jaffle_shop.not_null_stg_products_product_id.6373b0acf3",
+      "compiled": true,
+      "compiled_code": "\n    \n    \n\n\n\nselect product_id\nfrom \"jaffle_shop\".\"main\".\"stg_products\"\nwhere product_id is null\n\n\n",
+      "relation_name": null,
+      "batch_results": null
+    },
+    {
+      "status": "pass",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-09T18:34:50.870257Z",
+          "completed_at": "2025-12-09T18:34:50.880231Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-09T18:34:50.880569Z",
+          "completed_at": "2025-12-09T18:34:50.889534Z"
+        }
+      ],
+      "thread_id": "Thread-1 (worker)",
+      "execution_time": 0.022706985473632812,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": null,
+      "failures": 0,
+      "unique_id": "test.jaffle_shop.not_null_stg_orders_order_id.81cfe2fe64",
+      "compiled": true,
+      "compiled_code": "\n    \n    \n\n\n\nselect order_id\nfrom \"jaffle_shop\".\"main\".\"stg_orders\"\nwhere order_id is null\n\n\n",
+      "relation_name": null,
+      "batch_results": null
+    },
+    {
+      "status": "pass",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-09T18:34:50.874352Z",
+          "completed_at": "2025-12-09T18:34:50.882309Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-09T18:34:50.882723Z",
+          "completed_at": "2025-12-09T18:34:50.890800Z"
+        }
+      ],
+      "thread_id": "Thread-2 (worker)",
+      "execution_time": 0.018697023391723633,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": null,
+      "failures": 0,
+      "unique_id": "test.jaffle_shop.not_null_stg_supplies_supply_uuid.515c6eda6d",
+      "compiled": true,
+      "compiled_code": "\n    \n    \n\n\n\nselect supply_uuid\nfrom \"jaffle_shop\".\"main\".\"stg_supplies\"\nwhere supply_uuid is null\n\n\n",
+      "relation_name": null,
+      "batch_results": null
+    },
+    {
+      "status": "pass",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-09T18:34:50.875487Z",
+          "completed_at": "2025-12-09T18:34:50.883507Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-09T18:34:50.883814Z",
+          "completed_at": "2025-12-09T18:34:50.902494Z"
+        }
+      ],
+      "thread_id": "Thread-4 (worker)",
+      "execution_time": 0.03260064125061035,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": null,
+      "failures": 0,
+      "unique_id": "test.jaffle_shop.relationships_order_items_order_id__order_id__ref_orders_.a799023ee8",
+      "compiled": true,
+      "compiled_code": "\n    \n    \n\nwith child as (\n    select order_id as from_field\n    from \"jaffle_shop\".\"main\".\"order_items\"\n    where order_id is not null\n),\n\nparent as (\n    select order_id as to_field\n    from \"jaffle_shop\".\"main\".\"orders\"\n)\n\nselect\n    from_field\n\nfrom child\nleft join parent\n    on child.from_field = parent.to_field\n\nwhere parent.to_field is null\n\n\n",
+      "relation_name": null,
+      "batch_results": null
+    },
+    {
+      "status": "pass",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-09T18:34:50.899341Z",
+          "completed_at": "2025-12-09T18:34:50.901852Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-09T18:34:50.903855Z",
+          "completed_at": "2025-12-09T18:34:50.912206Z"
+        }
+      ],
+      "thread_id": "Thread-2 (worker)",
+      "execution_time": 0.020304203033447266,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": null,
+      "failures": 0,
+      "unique_id": "test.jaffle_shop.unique_customers_customer_id.c5af1ff4b1",
+      "compiled": true,
+      "compiled_code": "\n    \n    \n\nselect\n    customer_id as unique_field,\n    count(*) as n_records\n\nfrom \"jaffle_shop\".\"main\".\"customers\"\nwhere customer_id is not null\ngroup by customer_id\nhaving count(*) > 1\n\n\n",
+      "relation_name": null,
+      "batch_results": null
+    },
+    {
+      "status": "pass",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-09T18:34:50.894803Z",
+          "completed_at": "2025-12-09T18:34:50.901718Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-09T18:34:50.902647Z",
+          "completed_at": "2025-12-09T18:34:50.912689Z"
+        }
+      ],
+      "thread_id": "Thread-3 (worker)",
+      "execution_time": 0.021342992782592773,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": null,
+      "failures": 0,
+      "unique_id": "test.jaffle_shop.relationships_orders_customer_id__customer_id__ref_stg_customers_.918495ce16",
+      "compiled": true,
+      "compiled_code": "\n    \n    \n\nwith child as (\n    select customer_id as from_field\n    from \"jaffle_shop\".\"main\".\"orders\"\n    where customer_id is not null\n),\n\nparent as (\n    select customer_id as to_field\n    from \"jaffle_shop\".\"main\".\"stg_customers\"\n)\n\nselect\n    from_field\n\nfrom child\nleft join parent\n    on child.from_field = parent.to_field\n\nwhere parent.to_field is null\n\n\n",
+      "relation_name": null,
+      "batch_results": null
+    },
+    {
+      "status": "pass",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-09T18:34:50.896925Z",
+          "completed_at": "2025-12-09T18:34:50.903697Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-09T18:34:50.904874Z",
+          "completed_at": "2025-12-09T18:34:50.922010Z"
+        }
+      ],
+      "thread_id": "Thread-1 (worker)",
+      "execution_time": 0.030608177185058594,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": null,
+      "failures": 0,
+      "unique_id": "test.jaffle_shop.relationships_stg_order_items_order_id__order_id__ref_stg_orders_.dbe9930c54",
+      "compiled": true,
+      "compiled_code": "\n    \n    \n\nwith child as (\n    select order_id as from_field\n    from \"jaffle_shop\".\"main\".\"stg_order_items\"\n    where order_id is not null\n),\n\nparent as (\n    select order_id as to_field\n    from \"jaffle_shop\".\"main\".\"stg_orders\"\n)\n\nselect\n    from_field\n\nfrom child\nleft join parent\n    on child.from_field = parent.to_field\n\nwhere parent.to_field is null\n\n\n",
+      "relation_name": null,
+      "batch_results": null
+    },
+    {
+      "status": "pass",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-09T18:34:50.909841Z",
+          "completed_at": "2025-12-09T18:34:50.913222Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-09T18:34:50.913681Z",
+          "completed_at": "2025-12-09T18:34:50.930373Z"
+        }
+      ],
+      "thread_id": "Thread-4 (worker)",
+      "execution_time": 0.023597002029418945,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": null,
+      "failures": 0,
+      "unique_id": "test.jaffle_shop.unique_order_items_order_item_id.7d0a7e900a",
+      "compiled": true,
+      "compiled_code": "\n    \n    \n\nselect\n    order_item_id as unique_field,\n    count(*) as n_records\n\nfrom \"jaffle_shop\".\"main\".\"order_items\"\nwhere order_item_id is not null\ngroup by order_item_id\nhaving count(*) > 1\n\n\n",
+      "relation_name": null,
+      "batch_results": null
+    },
+    {
+      "status": "pass",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-09T18:34:50.920000Z",
+          "completed_at": "2025-12-09T18:34:50.923481Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-09T18:34:50.923856Z",
+          "completed_at": "2025-12-09T18:34:50.933451Z"
+        }
+      ],
+      "thread_id": "Thread-3 (worker)",
+      "execution_time": 0.016764163970947266,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": null,
+      "failures": 0,
+      "unique_id": "test.jaffle_shop.unique_stg_customers_customer_id.c7614daada",
+      "compiled": true,
+      "compiled_code": "\n    \n    \n\nselect\n    customer_id as unique_field,\n    count(*) as n_records\n\nfrom \"jaffle_shop\".\"main\".\"stg_customers\"\nwhere customer_id is not null\ngroup by customer_id\nhaving count(*) > 1\n\n\n",
+      "relation_name": null,
+      "batch_results": null
+    },
+    {
+      "status": "pass",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-09T18:34:50.917936Z",
+          "completed_at": "2025-12-09T18:34:50.921473Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-09T18:34:50.922209Z",
+          "completed_at": "2025-12-09T18:34:50.935667Z"
+        }
+      ],
+      "thread_id": "Thread-2 (worker)",
+      "execution_time": 0.021983861923217773,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": null,
+      "failures": 0,
+      "unique_id": "test.jaffle_shop.unique_orders_order_id.fed79b3a6e",
+      "compiled": true,
+      "compiled_code": "\n    \n    \n\nselect\n    order_id as unique_field,\n    count(*) as n_records\n\nfrom \"jaffle_shop\".\"main\".\"orders\"\nwhere order_id is not null\ngroup by order_id\nhaving count(*) > 1\n\n\n",
+      "relation_name": null,
+      "batch_results": null
+    },
+    {
+      "status": "pass",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-09T18:34:50.927373Z",
+          "completed_at": "2025-12-09T18:34:50.931079Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-09T18:34:50.931438Z",
+          "completed_at": "2025-12-09T18:34:50.943380Z"
+        }
+      ],
+      "thread_id": "Thread-1 (worker)",
+      "execution_time": 0.023516178131103516,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": null,
+      "failures": 0,
+      "unique_id": "test.jaffle_shop.unique_stg_locations_location_id.2e2fc58ecc",
+      "compiled": true,
+      "compiled_code": "\n    \n    \n\nselect\n    location_id as unique_field,\n    count(*) as n_records\n\nfrom \"jaffle_shop\".\"main\".\"stg_locations\"\nwhere location_id is not null\ngroup by location_id\nhaving count(*) > 1\n\n\n",
+      "relation_name": null,
+      "batch_results": null
+    },
+    {
+      "status": "pass",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-09T18:34:50.943540Z",
+          "completed_at": "2025-12-09T18:34:50.948877Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-09T18:34:50.949168Z",
+          "completed_at": "2025-12-09T18:34:50.957869Z"
+        }
+      ],
+      "thread_id": "Thread-2 (worker)",
+      "execution_time": 0.017251253128051758,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": null,
+      "failures": 0,
+      "unique_id": "test.jaffle_shop.unique_stg_products_product_id.7d950a1467",
+      "compiled": true,
+      "compiled_code": "\n    \n    \n\nselect\n    product_id as unique_field,\n    count(*) as n_records\n\nfrom \"jaffle_shop\".\"main\".\"stg_products\"\nwhere product_id is not null\ngroup by product_id\nhaving count(*) > 1\n\n\n",
+      "relation_name": null,
+      "batch_results": null
+    },
+    {
+      "status": "pass",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-09T18:34:50.936658Z",
+          "completed_at": "2025-12-09T18:34:50.939390Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-09T18:34:50.939871Z",
+          "completed_at": "2025-12-09T18:34:50.959706Z"
+        }
+      ],
+      "thread_id": "Thread-4 (worker)",
+      "execution_time": 0.0270841121673584,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": null,
+      "failures": 0,
+      "unique_id": "test.jaffle_shop.unique_stg_order_items_order_item_id.90e333a108",
+      "compiled": true,
+      "compiled_code": "\n    \n    \n\nselect\n    order_item_id as unique_field,\n    count(*) as n_records\n\nfrom \"jaffle_shop\".\"main\".\"stg_order_items\"\nwhere order_item_id is not null\ngroup by order_item_id\nhaving count(*) > 1\n\n\n",
+      "relation_name": null,
+      "batch_results": null
+    },
+    {
+      "status": "pass",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-09T18:34:50.940641Z",
+          "completed_at": "2025-12-09T18:34:50.944929Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-09T18:34:50.945433Z",
+          "completed_at": "2025-12-09T18:34:50.961424Z"
+        }
+      ],
+      "thread_id": "Thread-3 (worker)",
+      "execution_time": 0.02496480941772461,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": null,
+      "failures": 0,
+      "unique_id": "test.jaffle_shop.unique_stg_orders_order_id.e3b841c71a",
+      "compiled": true,
+      "compiled_code": "\n    \n    \n\nselect\n    order_id as unique_field,\n    count(*) as n_records\n\nfrom \"jaffle_shop\".\"main\".\"stg_orders\"\nwhere order_id is not null\ngroup by order_id\nhaving count(*) > 1\n\n\n",
+      "relation_name": null,
+      "batch_results": null
+    },
+    {
+      "status": "pass",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-09T18:34:50.952539Z",
+          "completed_at": "2025-12-09T18:34:50.954878Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-09T18:34:50.955251Z",
+          "completed_at": "2025-12-09T18:34:50.962091Z"
+        }
+      ],
+      "thread_id": "Thread-1 (worker)",
+      "execution_time": 0.012861251831054688,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": null,
+      "failures": 0,
+      "unique_id": "test.jaffle_shop.unique_stg_supplies_supply_uuid.c9e3edcfed",
+      "compiled": true,
+      "compiled_code": "\n    \n    \n\nselect\n    supply_uuid as unique_field,\n    count(*) as n_records\n\nfrom \"jaffle_shop\".\"main\".\"stg_supplies\"\nwhere supply_uuid is not null\ngroup by supply_uuid\nhaving count(*) > 1\n\n\n",
+      "relation_name": null,
+      "batch_results": null
+    },
+    {
+      "status": "pass",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-09T18:34:50.982817Z",
+          "completed_at": "2025-12-09T18:34:50.982819Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-09T18:34:50.983124Z",
+          "completed_at": "2025-12-09T18:34:51.048046Z"
+        }
+      ],
+      "thread_id": "Thread-3 (worker)",
+      "execution_time": 0.07234001159667969,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": null,
+      "failures": 0,
+      "unique_id": "unit_test.jaffle_shop.stg_locations.test_does_location_opened_at_trunc_to_date",
+      "compiled": true,
+      "compiled_code": "with\n\n __dbt__cte__raw_stores as (\n\n-- Fixture for raw_stores\nselect \n    \n    cast(1 as character varying(256))\n as id, \n    \n    cast('Vice City' as character varying(256))\n as name, \n    \n    cast('2016-09-01T00:00:00' as TIMESTAMP)\n as opened_at, \n    \n    cast(0.2 as DOUBLE)\n as tax_rate\nunion all\nselect \n    \n    cast(2 as character varying(256))\n as id, \n    \n    cast('San Andreas' as character varying(256))\n as name, \n    \n    cast('2079-10-27T23:59:59.9999' as TIMESTAMP)\n as opened_at, \n    \n    cast(0.1 as DOUBLE)\n as tax_rate\n), source as (\n\n    select * from __dbt__cte__raw_stores\n\n),\n\nrenamed as (\n\n    select\n\n        ----------  ids\n        id as location_id,\n\n        ---------- text\n        name as location_name,\n\n        ---------- numerics\n        tax_rate,\n\n        ---------- timestamps\n        date_trunc('day', opened_at) as opened_date\n\n    from source\n\n)\n\nselect * from renamed",
+      "relation_name": null,
+      "batch_results": null
+    },
+    {
+      "status": "pass",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-09T18:34:50.979167Z",
+          "completed_at": "2025-12-09T18:34:50.979169Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-09T18:34:50.979562Z",
+          "completed_at": "2025-12-09T18:34:51.054587Z"
+        }
+      ],
+      "thread_id": "Thread-4 (worker)",
+      "execution_time": 0.09036397933959961,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": null,
+      "failures": 0,
+      "unique_id": "unit_test.jaffle_shop.orders.test_order_items_compute_to_bools_correctly",
+      "compiled": true,
+      "compiled_code": "with\n\n __dbt__cte__stg_orders as (\n\n-- Fixture for stg_orders\nselect \n    \n    cast(1 as character varying(256))\n as order_id, cast(null as character varying(256)) as location_id, cast(null as character varying(256)) as customer_id, cast(null as INTEGER) as subtotal_cents, cast(null as INTEGER) as tax_paid_cents, cast(null as INTEGER) as order_total_cents, cast(null as DECIMAL(16,2)) as subtotal, cast(null as DECIMAL(16,2)) as tax_paid, cast(null as DECIMAL(16,2)) as order_total, cast(null as DATE) as ordered_at\nunion all\nselect \n    \n    cast(2 as character varying(256))\n as order_id, cast(null as character varying(256)) as location_id, cast(null as character varying(256)) as customer_id, cast(null as INTEGER) as subtotal_cents, cast(null as INTEGER) as tax_paid_cents, cast(null as INTEGER) as order_total_cents, cast(null as DECIMAL(16,2)) as subtotal, cast(null as DECIMAL(16,2)) as tax_paid, cast(null as DECIMAL(16,2)) as order_total, cast(null as DATE) as ordered_at\n),  __dbt__cte__order_items as (\n\n-- Fixture for order_items\nselect \n    \n    cast(1 as character varying(256))\n as order_item_id, \n    \n    cast(1 as character varying(256))\n as order_id, cast(null as character varying(256)) as product_id, cast(null as DATE) as ordered_at, cast(null as character varying(256)) as product_name, cast(null as DECIMAL(16,2)) as product_price, \n    \n    cast(True as BOOLEAN)\n as is_food_item, \n    \n    cast(False as BOOLEAN)\n as is_drink_item, cast(null as DECIMAL(38,2)) as supply_cost\nunion all\nselect \n    \n    cast(2 as character varying(256))\n as order_item_id, \n    \n    cast(1 as character varying(256))\n as order_id, cast(null as character varying(256)) as product_id, cast(null as DATE) as ordered_at, cast(null as character varying(256)) as product_name, cast(null as DECIMAL(16,2)) as product_price, \n    \n    cast(False as BOOLEAN)\n as is_food_item, \n    \n    cast(True as BOOLEAN)\n as is_drink_item, cast(null as DECIMAL(38,2)) as supply_cost\nunion all\nselect \n    \n    cast(3 as character varying(256))\n as order_item_id, \n    \n    cast(2 as character varying(256))\n as order_id, cast(null as character varying(256)) as product_id, cast(null as DATE) as ordered_at, cast(null as character varying(256)) as product_name, cast(null as DECIMAL(16,2)) as product_price, \n    \n    cast(True as BOOLEAN)\n as is_food_item, \n    \n    cast(False as BOOLEAN)\n as is_drink_item, cast(null as DECIMAL(38,2)) as supply_cost\n), orders as (\n\n    select * from __dbt__cte__stg_orders\n\n),\n\norder_items as (\n\n    select * from __dbt__cte__order_items\n\n),\n\norder_items_summary as (\n\n    select\n        order_id,\n\n        sum(supply_cost) as order_cost,\n        sum(product_price) as order_items_subtotal,\n        count(order_item_id) as count_order_items,\n        sum(\n            case\n                when is_food_item then 1\n                else 0\n            end\n        ) as count_food_items,\n        sum(\n            case\n                when is_drink_item then 1\n                else 0\n            end\n        ) as count_drink_items\n\n    from order_items\n\n    group by 1\n\n),\n\ncompute_booleans as (\n\n    select\n        orders.*,\n\n        order_items_summary.order_cost,\n        order_items_summary.order_items_subtotal,\n        order_items_summary.count_food_items,\n        order_items_summary.count_drink_items,\n        order_items_summary.count_order_items,\n        order_items_summary.count_food_items > 0 as is_food_order,\n        order_items_summary.count_drink_items > 0 as is_drink_order\n\n    from orders\n\n    left join\n        order_items_summary\n        on orders.order_id = order_items_summary.order_id\n\n),\n\ncustomer_order_count as (\n\n    select\n        *,\n\n        row_number() over (\n            partition by customer_id\n            order by ordered_at asc\n        ) as customer_order_number\n\n    from compute_booleans\n\n)\n\nselect * from customer_order_count",
+      "relation_name": null,
+      "batch_results": null
+    },
+    {
+      "status": "pass",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-09T18:34:50.964733Z",
+          "completed_at": "2025-12-09T18:34:50.964735Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-09T18:34:50.965447Z",
+          "completed_at": "2025-12-09T18:34:51.061377Z"
+        }
+      ],
+      "thread_id": "Thread-2 (worker)",
+      "execution_time": 0.09849071502685547,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": null,
+      "failures": 0,
+      "unique_id": "unit_test.jaffle_shop.order_items.test_supply_costs_sum_correctly",
+      "compiled": true,
+      "compiled_code": "with\n\n __dbt__cte__stg_order_items as (\n\n-- Fixture for stg_order_items\nselect cast(null as character varying(256)) as order_item_id, \n    \n    cast(1 as character varying(256))\n as order_id, \n    \n    cast(1 as character varying(256))\n as product_id\nunion all\nselect cast(null as character varying(256)) as order_item_id, \n    \n    cast(2 as character varying(256))\n as order_id, \n    \n    cast(2 as character varying(256))\n as product_id\nunion all\nselect cast(null as character varying(256)) as order_item_id, \n    \n    cast(2 as character varying(256))\n as order_id, \n    \n    cast(2 as character varying(256))\n as product_id\n),  __dbt__cte__stg_orders as (\n\n-- Fixture for stg_orders\nselect \n    \n    cast(1 as character varying(256))\n as order_id, cast(null as character varying(256)) as location_id, cast(null as character varying(256)) as customer_id, cast(null as INTEGER) as subtotal_cents, cast(null as INTEGER) as tax_paid_cents, cast(null as INTEGER) as order_total_cents, cast(null as DECIMAL(16,2)) as subtotal, cast(null as DECIMAL(16,2)) as tax_paid, cast(null as DECIMAL(16,2)) as order_total, cast(null as DATE) as ordered_at\nunion all\nselect \n    \n    cast(2 as character varying(256))\n as order_id, cast(null as character varying(256)) as location_id, cast(null as character varying(256)) as customer_id, cast(null as INTEGER) as subtotal_cents, cast(null as INTEGER) as tax_paid_cents, cast(null as INTEGER) as order_total_cents, cast(null as DECIMAL(16,2)) as subtotal, cast(null as DECIMAL(16,2)) as tax_paid, cast(null as DECIMAL(16,2)) as order_total, cast(null as DATE) as ordered_at\n),  __dbt__cte__stg_products as (\n\n-- Fixture for stg_products\nselect \n    \n    cast(1 as character varying(256))\n as product_id, cast(null as character varying(256)) as product_name, cast(null as character varying(256)) as product_type, cast(null as character varying(256)) as product_description, cast(null as DECIMAL(16,2)) as product_price, cast(null as BOOLEAN) as is_food_item, cast(null as BOOLEAN) as is_drink_item\nunion all\nselect \n    \n    cast(2 as character varying(256))\n as product_id, cast(null as character varying(256)) as product_name, cast(null as character varying(256)) as product_type, cast(null as character varying(256)) as product_description, cast(null as DECIMAL(16,2)) as product_price, cast(null as BOOLEAN) as is_food_item, cast(null as BOOLEAN) as is_drink_item\n),  __dbt__cte__stg_supplies as (\n\n-- Fixture for stg_supplies\nselect cast(null as character varying(256)) as supply_uuid, cast(null as character varying(256)) as supply_id, \n    \n    cast(1 as character varying(256))\n as product_id, cast(null as character varying(256)) as supply_name, \n    \n    cast(4.5 as DECIMAL(16,2))\n as supply_cost, cast(null as BOOLEAN) as is_perishable_supply\nunion all\nselect cast(null as character varying(256)) as supply_uuid, cast(null as character varying(256)) as supply_id, \n    \n    cast(2 as character varying(256))\n as product_id, cast(null as character varying(256)) as supply_name, \n    \n    cast(3.5 as DECIMAL(16,2))\n as supply_cost, cast(null as BOOLEAN) as is_perishable_supply\nunion all\nselect cast(null as character varying(256)) as supply_uuid, cast(null as character varying(256)) as supply_id, \n    \n    cast(2 as character varying(256))\n as product_id, cast(null as character varying(256)) as supply_name, \n    \n    cast(5.0 as DECIMAL(16,2))\n as supply_cost, cast(null as BOOLEAN) as is_perishable_supply\n), order_items as (\n\n    select * from __dbt__cte__stg_order_items\n\n),\n\n\norders as (\n\n    select * from __dbt__cte__stg_orders\n\n),\n\nproducts as (\n\n    select * from __dbt__cte__stg_products\n\n),\n\nsupplies as (\n\n    select * from __dbt__cte__stg_supplies\n\n),\n\norder_supplies_summary as (\n\n    select\n        product_id,\n\n        sum(supply_cost) as supply_cost\n\n    from supplies\n\n    group by 1\n\n),\n\njoined as (\n\n    select\n        order_items.*,\n\n        orders.ordered_at,\n\n        products.product_name,\n        products.product_price,\n        products.is_food_item,\n        products.is_drink_item,\n\n        order_supplies_summary.supply_cost\n\n    from order_items\n\n    left join orders on order_items.order_id = orders.order_id\n\n    left join products on order_items.product_id = products.product_id\n\n    left join order_supplies_summary\n        on order_items.product_id = order_supplies_summary.product_id\n\n)\n\nselect * from joined",
+      "relation_name": null,
+      "batch_results": null
+    }
+  ],
+  "elapsed_time": 0.3250539302825928,
+  "args": {
+    "show_all_deprecations": false,
+    "log_level": "info",
+    "upload_to_artifacts_ingest_api": false,
+    "log_file_max_bytes": 10485760,
+    "strict_mode": false,
+    "version_check": true,
+    "require_resource_names_without_spaces": true,
+    "require_generic_test_arguments_property": true,
+    "resource_types": [],
+    "printer_width": 80,
+    "log_format": "default",
+    "use_fast_test_edges": false,
+    "which": "test",
+    "warn_error_options": {
+      "error": [],
+      "warn": [],
+      "silence": []
+    },
+    "populate_cache": true,
+    "source_freshness_run_project_hooks": true,
+    "require_explicit_package_overrides_for_builtin_materializations": true,
+    "quiet": false,
+    "log_format_file": "debug",
+    "require_yaml_configuration_for_mf_time_spines": false,
+    "partial_parse_file_diff": true,
+    "require_all_warnings_handled_by_warn_error": false,
+    "invocation_command": "dbt test",
+    "print": true,
+    "state_modified_compare_more_unrendered_values": false,
+    "exclude_resource_types": [],
+    "cache_selected_only": false,
+    "macro_debugging": false,
+    "select": [],
+    "state_modified_compare_vars": false,
+    "defer": false,
+    "favor_state": false,
+    "static_parser": true,
+    "validate_macro_args": false,
+    "write_json": true,
+    "require_nested_cumulative_type_params": false,
+    "exclude": [],
+    "show_resource_report": false,
+    "indirect_selection": "eager",
+    "profiles_dir": "/Users/eka/Desktop/personal/correlator-io/correlator-dbt/tests/fixtures/sample_dbt_project/jaffle_shop",
+    "require_batched_execution_for_custom_microbatch_strategy": false,
+    "skip_nodes_if_on_run_start_fails": false,
+    "use_colors": true,
+    "log_level_file": "debug",
+    "project_dir": "/Users/eka/Desktop/personal/correlator-io/correlator-dbt/tests/fixtures/sample_dbt_project/jaffle_shop",
+    "partial_parse": true,
+    "introspect": true,
+    "log_path": "/Users/eka/Desktop/personal/correlator-io/correlator-dbt/tests/fixtures/sample_dbt_project/jaffle_shop/logs",
+    "vars": {},
+    "use_colors_file": true,
+    "send_anonymous_usage_stats": true
+  }
+}

@@ -7,60 +7,61 @@ This directory contains test data and sample dbt artifacts used for testing.
 ```
 fixtures/
 ├── README.md              # This file
-├── run_results.json       # Sample dbt run_results.json (Task 1.2)
-├── manifest.json          # Sample dbt manifest.json (Task 1.2)
-└── sample_dbt_project/    # Sample dbt project for integration tests (Task 1.6)
+├── run_results.json       # Sample dbt run_results.json ✅
+├── manifest.json          # Sample dbt manifest.json ✅
+└── sample_dbt_project/    # Sample dbt project (jaffle_shop, .gitignored)
 ```
 
-## Files (To Be Added)
+## Artifact Metadata
 
-### `run_results.json`
-Sample dbt test execution results file. Will be added in Task 1.2 (dbt Artifact Parser).
+**Generated:** December 9, 2025  
+**dbt Version:** 1.10.15  
+**dbt Adapter:** duckdb 1.10.0  
+**Source Project:** [dbt-labs/jaffle-shop](https://github.com/dbt-labs/jaffle-shop)  
+**Schema Version:**
+- run_results: v6 (https://schemas.getdbt.com/dbt/run-results/v6.json)
+- manifest: v12 (https://schemas.getdbt.com/dbt/manifest/v12.json)
 
-**Contains:**
-- Test execution results (pass, fail, error, skipped)
-- Timing information
-- Invocation ID
-- dbt version metadata
+## Files
 
-### `manifest.json`
-Sample dbt manifest file with node definitions. Will be added in Task 1.2 (dbt Artifact Parser).
-
-**Contains:**
-- Model definitions
-- Test definitions
-- Source definitions
-- Database connection metadata
-
-### `sample_dbt_project/`
-Complete sample dbt project for end-to-end integration testing. Will be added in Task 1.6 (Integration Testing).
+### `run_results.json` ✅
+Sample dbt test execution results file from jaffle shop project.
 
 **Contains:**
-- dbt_project.yml
-- profiles.yml
-- models/ (staging + mart models)
-- tests/ (schema tests + custom SQL tests)
+- **27 test results** (all passed in this sample)
+- Test execution timing information
+- Invocation ID: `1e651364-45a1-4a76-9f21-4b69fa49a65f`
+- Generated timestamp: `2025-12-09T18:34:51.064443Z`
+- Adapter response metadata
+- Compiled SQL for each test
 
-## Usage in Tests
+**Test Types in Sample:**
+- `accepted_values` - Column value validation
+- `not_null` - NULL constraint validation
+- `unique` - Uniqueness constraint validation
+- `relationships` - Foreign key validation
 
-```python
-import pytest
-import json
-from pathlib import Path
+### `manifest.json` ✅
+Sample dbt manifest file with complete project metadata.
 
-@pytest.fixture
-def sample_run_results():
-    """Load sample run_results.json fixture."""
-    fixture_path = Path(__file__).parent / "fixtures" / "run_results.json"
-    with open(fixture_path) as f:
-        return json.load(f)
+**Contains:**
+- **13 models** (7 staging views + 6 mart tables)
+- **27 data tests** (schema tests)
+- **6 source definitions** (raw data tables)
+- **19 metrics** (business metrics)
+- **6 semantic models** (MetricFlow definitions)
+- Database: `jaffle_shop` (DuckDB)
+- Schema: `main`
 
-def test_with_fixture(sample_run_results):
-    result = parse_run_results_dict(sample_run_results)
-    assert result is not None
-```
+**Key Nodes for Parser Testing:**
+- `model.jaffle_shop.stg_products`
+- `model.jaffle_shop.stg_customers`
+- `model.jaffle_shop.stg_orders`
+- `test.jaffle_shop.unique_customers_customer_id`
+- `test.jaffle_shop.not_null_customers_customer_id`
 
----
+### `sample_dbt_project/jaffle_shop/` (Not Committed)
+The cloned jaffle shop project used to generate the artifacts above. This directory is in `.gitignore` and should not be committed.
 
-**Note:** Fixture files will be populated during Task 1.2 (Parser) and Task 1.6 (Integration Testing).
-
+**How to Regenerate:**
+See `docs/JAFFLE_SHOP_SETUP.md` for complete instructions.

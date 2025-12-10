@@ -212,3 +212,10 @@ __marimo__/
 
 # Notes
 notes
+
+# dbt jaffle shop sample project (cloned for testing, not part of repo)
+tests/fixtures/sample_dbt_project/jaffle_shop/
+
+# DuckDB database files generated during testing
+*.duckdb
+*.duckdb.wal

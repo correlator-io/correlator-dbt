@@ -1,11 +1,11 @@
 """Command-line interface for dbt-correlator.
 
 This module provides the CLI entry point using Click framework. The CLI allows
-users to run dbt tests and automatically emit OpenLineage events with test
+users to run dbt tests and automatically emit OpenLineage events to correlator server with test
 results for incident correlation.
 
 Usage:
-    $ dbt-correlator test --openlineage-url http://localhost:8080/api/v1/lineage
+    $ dbt-correlator test --correlator-endpoint http://localhost:8080/api/v1/lineage/events
     $ dbt-correlator test --help
     $ dbt-correlator --version
 
@@ -48,10 +48,10 @@ def cli() -> None:
     type=click.Path(file_okay=False, dir_okay=True),
 )
 @click.option(
-    "--openlineage-url",
-    envvar="OPENLINEAGE_URL",
+    "--correlator-endpoint",
+    envvar="CORRELATOR_ENDPOINT",
     required=True,
-    help="OpenLineage API endpoint URL (env: OPENLINEAGE_URL)",
+    help="Correlator API endpoint URL (env: CORRELATOR_ENDPOINT)",
     type=str,
 )
 @click.option(
@@ -62,10 +62,10 @@ def cli() -> None:
     type=str,
 )
 @click.option(
-    "--openlineage-api-key",
-    envvar="OPENLINEAGE_API_KEY",
+    "--correlator-api-key",
+    envvar="CORRELATOR_API_KEY",
     default=None,
-    help="Optional API key for authentication (env: OPENLINEAGE_API_KEY)",
+    help="Optional API key for authentication (env: CORRELATOR_API_KEY)",
     type=str,
 )
 @click.option(
@@ -84,9 +84,9 @@ def cli() -> None:
 def test(
     project_dir: str,
     profiles_dir: str,
-    openlineage_url: str,
+    correlator_endpoint: str,
     openlineage_namespace: str,
-    openlineage_api_key: Optional[str],  # noqa: ARG001
+    correlator_api_key: Optional[str],  # noqa: ARG001
     job_name: str,
     skip_dbt_run: bool,
     dbt_args: tuple[str, ...],
@@ -102,28 +102,28 @@ def test(
     Example:
         \b
         # Run dbt test and emit to Correlator
-        $ dbt-correlator test --openlineage-url http://localhost:8080/api/v1/lineage
+        $ dbt-correlator test --correlator-endpoint http://localhost:8080/api/v1/lineage/events
 
         \b
         # Pass arguments to dbt test
-        $ dbt-correlator test --openlineage-url $CORRELATOR_URL -- --select my_model
+        $ dbt-correlator test --correlator-url $CORRELATOR_ENDPOINT -- --select my_model
 
         \b
         # Skip dbt run, only emit from existing artifacts
-        $ dbt-correlator test --skip-dbt-run --openlineage-url http://localhost:8080/api/v1/lineage
+        $ dbt-correlator test --skip-dbt-run --correlator-endpoint http://localhost:8080/api/v1/lineage/events
 
         \b
         # Use environment variables
-        $ export OPENLINEAGE_URL=http://localhost:8080/api/v1/lineage
+        $ export CORRELATOR_ENDPOINT=http://localhost:8080/api/v1/lineage
         $ export OPENLINEAGE_NAMESPACE=production
         $ dbt-correlator test
 
     Args:
         project_dir: Path to dbt project directory.
         profiles_dir: Path to dbt profiles directory.
-        openlineage_url: OpenLineage API endpoint URL.
+        correlator_endpoint: Correlator API endpoint URL.
         openlineage_namespace: Namespace for OpenLineage events.
-        openlineage_api_key: Optional API key for authentication.
+        correlator_api_key: Optional API key for authentication.
         job_name: Job name for OpenLineage events.
         skip_dbt_run: Skip running dbt test, only emit from existing artifacts.
         dbt_args: Additional arguments passed to dbt test.
@@ -137,7 +137,7 @@ def test(
     click.echo("Configuration received:")
     click.echo(f"  Project dir: {project_dir}")
     click.echo(f"  Profiles dir: {profiles_dir}")
-    click.echo(f"  OpenLineage URL: {openlineage_url}")
+    click.echo(f"  Correlator Endpoint: {correlator_endpoint}")
     click.echo(f"  Namespace: {openlineage_namespace}")
     click.echo(f"  Job name: {job_name}")
     click.echo(f"  Skip dbt run: {skip_dbt_run}")

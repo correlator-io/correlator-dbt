@@ -165,10 +165,12 @@ def parse_manifest(file_path: str) -> Manifest:
     )
 
 
-def extract_dataset_info(test_node: dict[str, Any], manifest: Manifest) -> DatasetInfo:
-    """Extract dataset namespace and name from test node.
+def extract_dataset_info(test_unique_id: str, manifest: Manifest) -> DatasetInfo:
+    """Extract dataset namespace and name from test node in manifest.
 
-    Resolves dataset references from test nodes using manifest metadata.
+    Looks up test node in manifest using unique_id and resolves dataset
+    references to construct proper namespace and name for OpenLineage.
+
     Handles:
         - Database connection info → namespace (e.g., postgresql://host:port/db)
         - Schema and table → name (e.g., my_schema.my_table)
@@ -176,7 +178,7 @@ def extract_dataset_info(test_node: dict[str, Any], manifest: Manifest) -> Datas
         - Multi-database/multi-schema scenarios
 
     Args:
-        test_node: Test node dictionary from run_results.json.
+        test_unique_id: Unique test identifier to lookup in manifest.nodes.
         manifest: Parsed manifest with node metadata.
 
     Returns:
@@ -184,12 +186,12 @@ def extract_dataset_info(test_node: dict[str, Any], manifest: Manifest) -> Datas
 
     Raises:
         ValueError: If dataset reference cannot be resolved.
-        KeyError: If required metadata missing from manifest.
+        KeyError: If test_unique_id not found in manifest or required metadata missing.
 
     Example:
         >>> manifest = parse_manifest("target/manifest.json")
-        >>> test_node = {"refs": [["orders"]], "database": "analytics", "schema": "dbt_prod"}
-        >>> info = extract_dataset_info(test_node, manifest)
+        >>> test_id = "test.jaffle_shop.unique_orders_order_id"
+        >>> info = extract_dataset_info(test_id, manifest)
         >>> print(info.namespace)  # postgresql://localhost:5432/analytics
         >>> print(info.name)       # dbt_prod.orders
 

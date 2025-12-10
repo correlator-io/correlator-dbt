@@ -1,8 +1,7 @@
 """OpenLineage event emitter for dbt test results.
 
 This module constructs OpenLineage events with embedded test results using the
-dataQualityAssertions dataset facet, and emits them to Correlator or any
-OpenLineage-compatible backend.
+dataQualityAssertions dataset facet, and emits them to Correlator backend.
 
 The emitter handles:
     - Grouping test results by dataset
@@ -66,32 +65,33 @@ def construct_event(
 
 def emit_event(
     event: Any,  # Will be: RunEvent
-    openlineage_url: str,
+    correlator_endpoint: str,
     api_key: Optional[str] = None,
 ) -> None:
-    """Emit OpenLineage event to Correlator or compatible backend.
+    """Emit OpenLineage event to Correlator backend.
 
     Sends the OpenLineage event via HTTP POST to the specified endpoint.
     Uses the official openlineage-python client for emission with proper
-    authentication and error handling.
+    authentication and error handling to the correlator backend server.
 
     Args:
         event: OpenLineage RunEvent to emit.
-        openlineage_url: OpenLineage API endpoint URL.
+        correlator_endpoint: OpenLineage API endpoint URL.
         api_key: Optional API key for authentication.
 
     Raises:
-        ConnectionError: If unable to connect to OpenLineage endpoint.
+        ConnectionError: If unable to connect to Correlator endpoint.
         TimeoutError: If request times out.
         ValueError: If event is invalid or response indicates error.
 
     Example:
         >>> event = construct_event(...)
-        >>> emit_event(event, "http://localhost:8080/api/v1/lineage")
+        >>> emit_event(event, "http://localhost:8080/api/v1/lineage/events")
 
     Note:
         Implementation in Task 1.3: OpenLineage Event Emitter.
-        Will use OpenLineageClient from openlineage-python.
+        Will use OpenLineageClient from openlineage-python to connect to the Correlator backend server.
+        read notes/plugin-developer-guide.md for details about the correlator backend server.
     """
     raise NotImplementedError(
         "emit_event() will be implemented in Task 1.3: OpenLineage Event Emitter"
