@@ -246,3 +246,9 @@ exclude_dirs = [
 skips = [
     "B101",
 ]
+
+[dependency-groups]
+dev = [
+    "dbt-core>=1.10.15",
+    "dbt-duckdb>=1.10.0",
+]

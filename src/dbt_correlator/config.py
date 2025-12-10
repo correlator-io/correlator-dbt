@@ -22,34 +22,34 @@ class CorrelatorConfig(BaseSettings):
     """Configuration for dbt-correlator.
 
     All settings can be provided via:
-        - Environment variables (OPENLINEAGE_URL, OPENLINEAGE_NAMESPACE, etc.)
+        - Environment variables (CORRELATOR_ENDPOINT, OPENLINEAGE_NAMESPACE, etc.)
         - Config file (.dbt-correlator.yml) - Implementation in Task 1.5
         - CLI arguments (override all others)
 
     Attributes:
-        openlineage_url: OpenLineage API endpoint URL (required).
-            Example: http://localhost:8080/api/v1/lineage
+        correlator_endpoint: Correlator API endpoint URL (required).
+            Example: http://localhost:8080/api/v1/lineage/events
         openlineage_namespace: Namespace for OpenLineage events (default: "dbt").
             Used to group related jobs/datasets.
-        openlineage_api_key: Optional API key for authentication.
+        correlator_api_key: Optional API key for authentication.
         dbt_project_dir: dbt project directory (default: ".").
         dbt_profiles_dir: dbt profiles directory (default: "~/.dbt").
         job_name: Job name for OpenLineage events (default: "dbt_test_run").
     """
 
     model_config = SettingsConfigDict(
-        env_prefix="",  # No prefix - use exact names like OPENLINEAGE_URL
+        env_prefix="",  # No prefix - use exact names like CORRELATOR_ENDPOINT
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",  # Ignore extra fields
     )
 
-    # OpenLineage configuration
-    openlineage_url: str = Field(
+    # Correlator configuration
+    correlator_endpoint: str = Field(
         ...,  # Required field
-        description="OpenLineage API endpoint URL",
-        examples=["http://localhost:8080/api/v1/lineage"],
+        description="Correlator API endpoint URL",
+        examples=["http://localhost:8080/api/v1/lineage/events"],
     )
 
     openlineage_namespace: str = Field(
@@ -58,7 +58,7 @@ class CorrelatorConfig(BaseSettings):
         examples=["dbt", "production", "staging"],
     )
 
-    openlineage_api_key: Optional[str] = Field(
+    correlator_api_key: Optional[str] = Field(
         default=None,
         description="Optional API key for authentication",
     )
