@@ -168,9 +168,9 @@ def parse_manifest(file_path: str) -> Manifest:
 def extract_dataset_info(test_unique_id: str, manifest: Manifest) -> DatasetInfo:
     """Extract dataset namespace and name from test node in manifest.
 
-    Looks up test node in manifest using unique_id and resolves dataset 
+    Looks up test node in manifest using unique_id and resolves dataset
     references to construct proper namespace and name for OpenLineage.
-    
+
     Handles:
         - Database connection info → namespace (e.g., postgresql://host:port/db)
         - Schema and table → name (e.g., my_schema.my_table)

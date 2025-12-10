@@ -181,6 +181,17 @@ minversion = "7.0"
 testpaths = [
     "tests",
 ]
+norecursedirs = [
+    "tests/fixtures/sample_dbt_project",
+    "*.egg",
+    ".eggs",
+    "dist",
+    "build",
+    "docs",
+    ".tox",
+    ".git",
+    "__pycache__",
+]
 python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"

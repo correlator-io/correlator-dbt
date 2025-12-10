@@ -51,7 +51,7 @@ repos:
     hooks:
       - id: mypy
         exclude: ^(docs/|tests/fixtures/)
-        additional_dependencies: 
+        additional_dependencies:
           - pydantic
           - types-click
         args: [--config-file=mypy.ini]
@@ -74,4 +74,4 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
-        stages: [commit]
+        stages: [pre-commit]
