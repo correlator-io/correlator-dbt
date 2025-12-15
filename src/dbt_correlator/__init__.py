@@ -28,14 +28,21 @@ __author__ = "Emmanuel King Kasulani"
 __email__ = "kasulani@gmail.com"
 __license__ = "Apache-2.0"
 
-# Public API exports (will be implemented in later tasks)
+# Public API exports
 __all__ = [
     "__version__",
-    "construct_event",
-    "emit_event",
+    "construct_events",
+    "create_wrapping_event",
+    "emit_events",
+    "group_tests_by_dataset",
     "parse_manifest",
     "parse_run_results",
 ]
 
-from .emitter import construct_event, emit_event
+from .emitter import (
+    construct_events,
+    create_wrapping_event,
+    emit_events,
+    group_tests_by_dataset,
+)
 from .parser import parse_manifest, parse_run_results

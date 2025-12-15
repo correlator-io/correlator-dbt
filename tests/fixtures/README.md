@@ -14,10 +14,10 @@ fixtures/
 
 ## Artifact Metadata
 
-**Generated:** December 9, 2025  
-**dbt Version:** 1.10.15  
-**dbt Adapter:** duckdb 1.10.0  
-**Source Project:** [dbt-labs/jaffle-shop](https://github.com/dbt-labs/jaffle-shop)  
+**Generated:** December 9, 2025
+**dbt Version:** 1.10.15
+**dbt Adapter:** duckdb 1.10.0
+**Source Project:** [dbt-labs/jaffle-shop](https://github.com/dbt-labs/jaffle-shop)
 **Schema Version:**
 - run_results: v6 (https://schemas.getdbt.com/dbt/run-results/v6.json)
 - manifest: v12 (https://schemas.getdbt.com/dbt/manifest/v12.json)

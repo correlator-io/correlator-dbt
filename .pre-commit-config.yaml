@@ -53,7 +53,10 @@ repos:
         exclude: ^(docs/|tests/fixtures/)
         additional_dependencies:
           - pydantic
+          - pydantic-settings
           - types-click
+          - types-attrs
+          - types-requests
         args: [--config-file=mypy.ini]
 
   # Security checks with bandit
