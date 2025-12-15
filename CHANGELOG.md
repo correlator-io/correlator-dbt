@@ -28,4 +28,3 @@ This is a skeleton release for pipeline testing and PyPI name reservation. All f
 
 [Unreleased]: https://github.com/correlator-io/correlator-dbt/compare/v0.0.1...HEAD
 [0.0.1]: https://github.com/correlator-io/correlator-dbt/releases/tag/v0.0.1
-

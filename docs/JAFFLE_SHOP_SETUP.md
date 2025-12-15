@@ -2,7 +2,7 @@
 
 **Purpose:** Set up the dbt jaffle shop example project to generate sample artifacts for parser testing.
 
-**Last Updated:** December 9, 2025  
+**Last Updated:** December 9, 2025
 **Database Adapter:** DuckDB (lightweight, no server required)
 
 ---
@@ -252,10 +252,10 @@ python -c "import json; results = json.load(open('run_results.json'))['results']
 python -c "import json; m = json.load(open('manifest.json')); print('dbt version:', m['metadata']['dbt_version']); print('adapter:', m['metadata']['adapter_type'])"
 
 # Count nodes by type
-python -c "import json; nodes = json.load(open('manifest.json'))['nodes']; types = {}; 
-for k, v in nodes.items(): 
-    t = v['resource_type']; 
-    types[t] = types.get(t, 0) + 1; 
+python -c "import json; nodes = json.load(open('manifest.json'))['nodes']; types = {};
+for k, v in nodes.items():
+    t = v['resource_type'];
+    types[t] = types.get(t, 0) + 1;
 print('Node counts:', types)"
 ```
 
@@ -426,4 +426,3 @@ After completing this setup:
 ---
 
 **Setup Status:** Follow steps 1-6 above to complete the setup.
-

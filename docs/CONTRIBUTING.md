@@ -186,4 +186,3 @@ If you have any questions or issues, please:
 - Join the discussion: https://github.com/correlator-io/correlator/discussions
 
 Thank you for contributing to dbt-correlator! 🎉
-

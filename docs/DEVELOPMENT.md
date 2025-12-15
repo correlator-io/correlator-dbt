@@ -32,7 +32,7 @@ Our development workflow is built around **8 intent-based commands** that handle
 - **`make install`** - Install/update dependencies (after changing pyproject.toml)
 - **`make run`** - Execute CLI (default: shows help, or run test, run linter)
 
-### 🛠️ Daily Development  
+### 🛠️ Daily Development
 - **`make check`** - Verify code quality (format + lint + typecheck + test + security)
 - **`make fix`** - Repair issues (format + fix lints + clean artifacts)
 

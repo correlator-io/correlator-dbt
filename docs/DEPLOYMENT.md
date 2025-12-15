@@ -48,7 +48,7 @@ Automated versioning is the primary method, but if needed, you can manually trig
    ```bash
    # For a new feature (minor version bump)
    git checkout -b minor/add-great-expectations-support
-   
+
    # Make changes, commit with proper format
    git add .
    git commit -m "minor: Add Great Expectations integration"
@@ -72,7 +72,7 @@ For testing releases before publishing to production PyPI:
    ```bash
    # Build the package
    uv build
-   
+
    # Publish to TestPyPI
    uv publish --repository testpypi
    ```
@@ -109,10 +109,10 @@ After a release is published:
    # Fresh virtual environment
    python -m venv test-env
    source test-env/bin/activate
-   
+
    # Install from PyPI
    pip install correlator-dbt
-   
+
    # Verify CLI works
    dbt-correlator --version
    dbt-correlator --help
@@ -231,4 +231,3 @@ git push origin v0.1.X
 ---
 
 **For questions about deployment, see [CONTRIBUTING.md](CONTRIBUTING.md) or open a Discussion.**
-
