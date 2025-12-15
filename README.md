@@ -40,6 +40,9 @@ putting you in control of incidents instead of reacting to them.
 **Built on Standards:**
 Uses OpenLineage, the industry standard for data lineage. No vendor lock-in, no proprietary formats.
 
+**What Makes This Different:**
+`dbt-correlator` is purpose-built for incident correlation, not just lineage tracking. It's optimized for faster execution and designed to grow with your dbt workflows as your needs evolve.
+
 ---
 
 ## Versioning
@@ -73,8 +76,12 @@ The current version is in early development stage, so expect possible API change
 ## Requirements
 
 - Python 3.9+
-- dbt-core 1.0+
+- dbt-core 1.0+ (tested with dbt 1.10+)
 - [Correlator](https://github.com/correlator-io/correlator)
+
+**dbt Artifact Compatibility:**
+- run_results.json: Schema v5+ (dbt 1.0+)
+- manifest.json: Schema v11+ (dbt 1.5+)
 
 ---
 
