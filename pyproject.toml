@@ -43,6 +43,7 @@ dependencies = [
     "click>=8.1.0",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
+    "requests>=2.28.0",  # Explicit dependency for HTTP emission
 ]
 
 [project.license]
@@ -255,7 +256,10 @@ exclude_dirs = [
     "docs",
 ]
 skips = [
-    "B101",
+    "B101",  # assert_used - needed for tests
+    "B404",  # import_subprocess - required for dbt execution
+    "B603",  # subprocess_without_shell_equals_true - we use list form intentionally
+    "B607",  # start_process_with_partial_path - dbt should be in PATH
 ]
 
 [dependency-groups]

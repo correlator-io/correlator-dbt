@@ -270,7 +270,7 @@ run-typecheck:
 # Run: Execute security scanner
 run-security:
 	@echo "🔒 Running bandit security scanner..."; \
-	$(UV) run bandit -r src/$(PACKAGE_NAME)
+	$(UV) run bandit -c pyproject.toml -r src/$(PACKAGE_NAME)
 
 # Check: Run all quality checks
 check-all:
@@ -311,7 +311,7 @@ check-all:
 	fi; \
 	echo ""; \
 	echo "🔒 Running security scan..."; \
-	if $(UV) run bandit -r src/$(PACKAGE_NAME) -q; then \
+	if $(UV) run bandit -c pyproject.toml -r src/$(PACKAGE_NAME) -q; then \
 		echo "✅ Security scan passed"; \
 	else \
 		echo "❌ Security scan failed"; \
