@@ -13,12 +13,168 @@ The CLI follows Click conventions and integrates with the correlator ecosystem
 using the same patterns as other correlator plugins.
 """
 
+import subprocess
 import sys
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 import click
 
 from . import __version__
+from .config import CorrelatorConfig
+from .emitter import construct_events, create_wrapping_event, emit_events
+from .parser import parse_manifest, parse_run_results
+
+
+def run_dbt_test(
+    project_dir: str,
+    profiles_dir: str,
+    dbt_args: tuple[str, ...],
+) -> subprocess.CompletedProcess[bytes]:
+    """Execute dbt test as subprocess.
+
+    Runs dbt test with the specified project and profiles directories,
+    passing through any additional arguments. Output is streamed directly
+    to the console (not captured).
+
+    Args:
+        project_dir: Path to dbt project directory.
+        profiles_dir: Path to dbt profiles directory.
+        dbt_args: Additional arguments to pass to dbt test.
+
+    Returns:
+        CompletedProcess with returncode from dbt execution.
+
+    Raises:
+        FileNotFoundError: If dbt executable is not found in PATH.
+
+    Example:
+        >>> result = run_dbt_test(".", "~/.dbt", ("--select", "my_model"))
+        >>> result.returncode
+        0
+    """
+    # Expand ~ in paths for shell-like behavior
+    expanded_profiles_dir = str(Path(profiles_dir).expanduser())
+
+    cmd = [
+        "dbt",
+        "test",
+        "--project-dir",
+        project_dir,
+        "--profiles-dir",
+        expanded_profiles_dir,
+        *dbt_args,
+    ]
+
+    try:
+        # Stream output to console (no capture)
+        return subprocess.run(
+            cmd,
+            check=False,  # Don't raise on non-zero exit
+            cwd=project_dir,
+        )
+    except FileNotFoundError as e:
+        raise FileNotFoundError(
+            f"dbt executable not found. Please install dbt-core: {e}"
+        ) from e
+
+
+def execute_test_workflow(
+    project_dir: str,
+    profiles_dir: str,
+    correlator_endpoint: str,
+    namespace: str,
+    job_name: str,
+    api_key: Optional[str],
+    skip_dbt_run: bool,
+    dbt_args: tuple[str, ...],
+) -> int:
+    """Execute complete test workflow with OpenLineage event emission.
+
+    This is the main workflow function that:
+    1. Creates START wrapping event
+    2. Runs dbt test (unless skip_dbt_run)
+    3. Parses dbt artifacts
+    4. Constructs test events with dataQualityAssertions
+    5. Creates terminal event (COMPLETE/FAIL)
+    6. Batch emits all events to Correlator
+    7. Returns dbt exit code
+
+    Args:
+        project_dir: Path to dbt project directory.
+        profiles_dir: Path to dbt profiles directory.
+        correlator_endpoint: Correlator API endpoint URL.
+        namespace: OpenLineage namespace (e.g., "dbt").
+        job_name: Job name for OpenLineage events.
+        api_key: Optional API key for Correlator authentication.
+        skip_dbt_run: If True, skip dbt execution and use existing artifacts.
+        dbt_args: Additional arguments to pass to dbt test.
+
+    Returns:
+        Exit code from dbt test (0=success, 1=test failures, 2=error).
+        If skip_dbt_run, returns 0 unless artifact parsing fails.
+
+    Note:
+        Emission failures are logged as warnings but don't affect the exit code.
+        This ensures lineage is "fire-and-forget" - dbt execution is primary.
+    """
+    run_id = str(uuid.uuid4())
+    dbt_exit_code = 0
+
+    # 1. Create START event
+    start_timestamp = datetime.now(timezone.utc)
+    start_event = create_wrapping_event(
+        "START", run_id, job_name, namespace, start_timestamp
+    )
+
+    # 2. Run dbt test (unless skip)
+    if not skip_dbt_run:
+        try:
+            result = run_dbt_test(project_dir, profiles_dir, dbt_args)
+            dbt_exit_code = result.returncode
+        except FileNotFoundError:
+            click.echo(
+                "Error: dbt executable not found. Please install dbt-core.",
+                err=True,
+            )
+            return 127  # Command not found exit code
+
+    # 3. Parse artifacts using CorrelatorConfig for path resolution
+    config = CorrelatorConfig(
+        correlator_endpoint=correlator_endpoint,
+        dbt_project_dir=project_dir,
+    )
+
+    try:
+        run_results = parse_run_results(str(config.get_run_results_path()))
+        manifest = parse_manifest(str(config.get_manifest_path()))
+    except FileNotFoundError as e:
+        click.echo(f"Error: {e}", err=True)
+        return 1
+
+    # 4. Construct test events
+    test_events = construct_events(run_results, manifest, namespace, job_name, run_id)
+
+    # 5. Create terminal event (COMPLETE or FAIL)
+    terminal_timestamp = datetime.now(timezone.utc)
+    terminal_type = "COMPLETE" if dbt_exit_code == 0 else "FAIL"
+    terminal_event = create_wrapping_event(
+        terminal_type, run_id, job_name, namespace, terminal_timestamp
+    )
+
+    # 6. Batch emit all events
+    all_events = [start_event, *test_events, terminal_event]
+
+    try:
+        emit_events(all_events, correlator_endpoint, api_key)
+        click.echo(f"Emitted {len(all_events)} events to Correlator")
+    except (ConnectionError, TimeoutError, ValueError) as e:
+        click.echo(f"Warning: Failed to emit events to Correlator: {e}", err=True)
+        # Don't fail - lineage is fire-and-forget
+
+    return dbt_exit_code
 
 
 @click.group()
@@ -86,7 +242,7 @@ def test(
     profiles_dir: str,
     correlator_endpoint: str,
     openlineage_namespace: str,
-    correlator_api_key: Optional[str],  # noqa: ARG001
+    correlator_api_key: Optional[str],
     job_name: str,
     skip_dbt_run: bool,
     dbt_args: tuple[str, ...],
@@ -106,7 +262,7 @@ def test(
 
         \b
         # Pass arguments to dbt test
-        $ dbt-correlator test --correlator-url $CORRELATOR_ENDPOINT -- --select my_model
+        $ dbt-correlator test --correlator-endpoint $CORRELATOR_ENDPOINT -- --select my_model
 
         \b
         # Skip dbt run, only emit from existing artifacts
@@ -114,50 +270,21 @@ def test(
 
         \b
         # Use environment variables
-        $ export CORRELATOR_ENDPOINT=http://localhost:8080/api/v1/lineage
+        $ export CORRELATOR_ENDPOINT=http://localhost:8080/api/v1/lineage/events
         $ export OPENLINEAGE_NAMESPACE=production
         $ dbt-correlator test
-
-    Args:
-        project_dir: Path to dbt project directory.
-        profiles_dir: Path to dbt profiles directory.
-        correlator_endpoint: Correlator API endpoint URL.
-        openlineage_namespace: Namespace for OpenLineage events.
-        correlator_api_key: Optional API key for authentication.
-        job_name: Job name for OpenLineage events.
-        skip_dbt_run: Skip running dbt test, only emit from existing artifacts.
-        dbt_args: Additional arguments passed to dbt test.
-
-    Note:
-        Implementation in Task 1.4: CLI Implementation.
-        Will integrate parser, emitter, and config modules.
     """
-    click.echo("🚧 dbt-correlator is under development")
-    click.echo("")
-    click.echo("Configuration received:")
-    click.echo(f"  Project dir: {project_dir}")
-    click.echo(f"  Profiles dir: {profiles_dir}")
-    click.echo(f"  Correlator Endpoint: {correlator_endpoint}")
-    click.echo(f"  Namespace: {openlineage_namespace}")
-    click.echo(f"  Job name: {job_name}")
-    click.echo(f"  Skip dbt run: {skip_dbt_run}")
-    if dbt_args:
-        click.echo(f"  dbt args: {' '.join(dbt_args)}")
-    click.echo("")
-    click.echo(
-        "✨ This command will be fully implemented in Task 1.4: CLI Implementation"
+    exit_code = execute_test_workflow(
+        project_dir=project_dir,
+        profiles_dir=profiles_dir,
+        correlator_endpoint=correlator_endpoint,
+        namespace=openlineage_namespace,
+        job_name=job_name,
+        api_key=correlator_api_key,
+        skip_dbt_run=skip_dbt_run,
+        dbt_args=dbt_args,
     )
-    click.echo("")
-    click.echo("What it will do:")
-    click.echo("  1. Run dbt test (unless --skip-dbt-run)")
-    click.echo("  2. Parse dbt artifacts (run_results.json, manifest.json)")
-    click.echo("  3. Construct OpenLineage event with test results")
-    click.echo("  4. Emit event to Correlator")
-    click.echo("")
-    click.echo("For now, this is a functional skeleton for pipeline testing.")
-
-    # Exit with success so pipeline tests pass
-    sys.exit(0)
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

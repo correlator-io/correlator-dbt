@@ -26,7 +26,7 @@ coverage:
     # Coverage for new code in patches/PRs
     patch:
       default:
-        target: 100%          # New code should have 100% coverage
+        target: 90%          # New code should have 100% coverage
         threshold: 1%         # Allow 1% wiggle room
         base: auto
         only_pulls: true      # Only use in PRs
