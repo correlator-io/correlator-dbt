@@ -18,14 +18,76 @@ import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import click
 
 from . import __version__
-from .config import CorrelatorConfig
+from .config import (
+    CONFIG_TO_CLI_MAPPING,
+    flatten_config,
+    get_manifest_path,
+    get_run_results_path,
+    load_yaml_config,
+)
 from .emitter import construct_events, create_wrapping_event, emit_events
 from .parser import parse_manifest, parse_run_results
+
+
+def load_config_callback(
+    ctx: click.Context, param: click.Parameter, value: Optional[str]
+) -> Optional[str]:
+    """Load config file and set defaults for unset options.
+
+    This callback loads configuration from YAML file and sets up Click's
+    default_map so that config file values are used as defaults. This enables
+    the priority order: CLI args > env vars > config file > defaults.
+
+    Args:
+        ctx: Click context object.
+        param: Click parameter (the --config option).
+        value: Path to config file (or None for auto-discovery).
+
+    Returns:
+        The config file path for reference.
+
+    Raises:
+        click.BadParameter: If config file exists but is invalid YAML.
+        click.BadParameter: If explicitly specified config file doesn't exist.
+    """
+    config_path = Path(value) if value else None
+
+    # If explicit path provided and file doesn't exist, fail early
+    if config_path is not None and not config_path.exists():
+        raise click.BadParameter(
+            f"Config file not found: {config_path}", param=param, param_hint="--config"
+        )
+
+    try:
+        yaml_config = load_yaml_config(config_path)
+    except ValueError as e:
+        raise click.BadParameter(str(e), param=param, param_hint="--config") from e
+
+    if yaml_config:
+        # Flatten nested YAML to match Click option names
+        flat_config = flatten_config(yaml_config)
+
+        # Map flat config keys to Click option names using shared mapping
+        default_map: dict[str, Any] = {}
+        for config_key, click_key in CONFIG_TO_CLI_MAPPING.items():
+            if config_key in flat_config:
+                default_map[click_key] = flat_config[config_key]
+
+        # Set default_map on context for this command
+        # Merge existing default_map with config file values
+        if ctx.default_map:
+            merged = dict(ctx.default_map)
+            merged.update(default_map)
+            ctx.default_map = merged
+        else:
+            ctx.default_map = default_map
+
+    return value
 
 
 def run_dbt_test(
@@ -141,15 +203,10 @@ def execute_test_workflow(
             )
             return 127  # Command not found exit code
 
-    # 3. Parse artifacts using CorrelatorConfig for path resolution
-    config = CorrelatorConfig(
-        correlator_endpoint=correlator_endpoint,
-        dbt_project_dir=project_dir,
-    )
-
+    # 3. Parse dbt artifacts
     try:
-        run_results = parse_run_results(str(config.get_run_results_path()))
-        manifest = parse_manifest(str(config.get_manifest_path()))
+        run_results = parse_run_results(str(get_run_results_path(project_dir)))
+        manifest = parse_manifest(str(get_manifest_path(project_dir)))
     except FileNotFoundError as e:
         click.echo(f"Error: {e}", err=True)
         return 1
@@ -191,6 +248,15 @@ def cli() -> None:
 
 
 @cli.command()
+@click.option(
+    "--config",
+    "-c",
+    callback=load_config_callback,
+    is_eager=True,
+    expose_value=False,
+    help="Path to config file (default: .dbt-correlator.yml)",
+    type=click.Path(dir_okay=False),
+)
 @click.option(
     "--project-dir",
     default=".",

@@ -658,3 +658,214 @@ class TestErrorHandling:
 
         assert result.exit_code == 0
         assert "warning" in result.output.lower() or "failed" in result.output.lower()
+
+
+# =============================================================================
+# H. Config File Integration Tests
+# =============================================================================
+
+
+class TestConfigFileIntegration:
+    """Tests for config file integration with CLI."""
+
+    def test_test_command_with_config_file(
+        self, runner: CliRunner, cli_mocks: dict[str, Any], tmp_path: Path
+    ) -> None:
+        """Test that config file values are used when no CLI args provided."""
+        config_file = tmp_path / ".dbt-correlator.yml"
+        config_file.write_text(
+            """\
+correlator:
+  endpoint: http://config-file-endpoint:8080/api/v1/lineage/events
+  namespace: from-config
+"""
+        )
+
+        runner.invoke(
+            cli,
+            [
+                "test",
+                "--config",
+                str(config_file),
+            ],
+        )
+
+        # Verify the endpoint from config file was used
+        cli_mocks["emit"].assert_called_once()
+        call_args = cli_mocks["emit"].call_args
+        assert (
+            call_args[0][1] == "http://config-file-endpoint:8080/api/v1/lineage/events"
+        )
+
+    def test_cli_args_override_config_file(
+        self, runner: CliRunner, cli_mocks: dict[str, Any], tmp_path: Path
+    ) -> None:
+        """Test that CLI args take precedence over config file values."""
+        config_file = tmp_path / ".dbt-correlator.yml"
+        config_file.write_text(
+            """\
+correlator:
+  endpoint: http://config-file-endpoint:8080
+  namespace: from-config
+"""
+        )
+
+        runner.invoke(
+            cli,
+            [
+                "test",
+                "--config",
+                str(config_file),
+                "--correlator-endpoint",
+                "http://cli-override:8080/api/v1/lineage/events",
+            ],
+        )
+
+        # CLI arg should override config file
+        cli_mocks["emit"].assert_called_once()
+        call_args = cli_mocks["emit"].call_args
+        assert call_args[0][1] == "http://cli-override:8080/api/v1/lineage/events"
+
+    def test_config_option_shown_in_help(self, runner: CliRunner) -> None:
+        """Test that --config option appears in help."""
+        result = runner.invoke(cli, ["test", "--help"])
+
+        assert result.exit_code == 0
+        assert "--config" in result.output
+
+    def test_invalid_config_file_shows_error(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """Test that invalid YAML config file produces clear error."""
+        config_file = tmp_path / "invalid.yml"
+        config_file.write_text("invalid: yaml: [unclosed")
+
+        result = runner.invoke(
+            cli,
+            [
+                "test",
+                "--config",
+                str(config_file),
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert "invalid" in result.output.lower() or "yaml" in result.output.lower()
+
+    def test_missing_config_file_with_explicit_path_shows_error(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """Test that explicitly specified missing config file shows error."""
+        non_existent = tmp_path / "does-not-exist.yml"
+
+        result = runner.invoke(
+            cli,
+            [
+                "test",
+                "--config",
+                str(non_existent),
+            ],
+        )
+
+        # Should either fail with missing config or missing endpoint
+        assert result.exit_code != 0
+
+    def test_env_var_interpolation_in_config_file(
+        self,
+        runner: CliRunner,
+        cli_mocks: dict[str, Any],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Test that env vars in config file are expanded."""
+        monkeypatch.setenv("MY_ENDPOINT", "http://from-env:8080/api/v1/lineage/events")
+
+        config_file = tmp_path / ".dbt-correlator.yml"
+        config_file.write_text(
+            """\
+correlator:
+  endpoint: ${MY_ENDPOINT}
+"""
+        )
+
+        runner.invoke(
+            cli,
+            [
+                "test",
+                "--config",
+                str(config_file),
+            ],
+        )
+
+        cli_mocks["emit"].assert_called_once()
+        call_args = cli_mocks["emit"].call_args
+        assert call_args[0][1] == "http://from-env:8080/api/v1/lineage/events"
+
+    def test_auto_discovers_config_in_cwd(
+        self,
+        runner: CliRunner,
+        cli_mocks: dict[str, Any],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Test that .dbt-correlator.yml is auto-discovered in cwd without --config."""
+        # Create config file in tmp_path (will be cwd)
+        config_file = tmp_path / ".dbt-correlator.yml"
+        config_file.write_text(
+            """\
+correlator:
+  endpoint: http://auto-discovered:8080/api/v1/lineage/events
+  namespace: auto-discovered-namespace
+"""
+        )
+
+        # Change working directory to tmp_path
+        monkeypatch.chdir(tmp_path)
+
+        # Invoke WITHOUT --config flag - should auto-discover
+        runner.invoke(
+            cli,
+            ["test"],  # No --config flag!
+        )
+
+        # Verify auto-discovered endpoint was used
+        cli_mocks["emit"].assert_called_once()
+        call_args = cli_mocks["emit"].call_args
+        assert call_args[0][1] == "http://auto-discovered:8080/api/v1/lineage/events"
+
+    def test_env_var_overrides_config_file_in_cli(
+        self,
+        runner: CliRunner,
+        cli_mocks: dict[str, Any],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Test that CORRELATOR_ENDPOINT env var overrides config file value."""
+        # Set env var with higher priority
+        monkeypatch.setenv(
+            "CORRELATOR_ENDPOINT", "http://from-env-var:8080/api/v1/lineage/events"
+        )
+
+        # Create config file with different endpoint
+        config_file = tmp_path / ".dbt-correlator.yml"
+        config_file.write_text(
+            """\
+correlator:
+  endpoint: http://from-config-file:8080/api/v1/lineage/events
+"""
+        )
+
+        # Invoke with config file - env var should still win
+        runner.invoke(
+            cli,
+            [
+                "test",
+                "--config",
+                str(config_file),
+            ],
+        )
+
+        # Verify env var wins over config file
+        cli_mocks["emit"].assert_called_once()
+        call_args = cli_mocks["emit"].call_args
+        assert call_args[0][1] == "http://from-env-var:8080/api/v1/lineage/events"

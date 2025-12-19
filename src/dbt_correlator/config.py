@@ -1,121 +1,215 @@
 """Configuration management for dbt-correlator.
 
-This module handles configuration from environment variables, config files,
-and CLI arguments with proper priority order:
+This module handles configuration from config files and provides path helpers.
+Configuration priority order (handled by Click in cli.py):
     1. CLI arguments (highest priority)
     2. Environment variables
     3. Config file (.dbt-correlator.yml)
     4. Default values (lowest priority)
 
-Uses Pydantic Settings for type-safe configuration with automatic
-environment variable loading.
+See docs/CONFIGURATION.md for detailed documentation.
 """
 
+import os
+import re
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
-from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+import yaml
+
+# Default config file names (searched in order)
+DEFAULT_CONFIG_FILENAMES = (".dbt-correlator.yml", ".dbt-correlator.yaml")
+
+# Mapping from YAML nested keys to CorrelatorConfig field names
+CONFIG_FIELD_MAPPING: dict[tuple[str, str], str] = {
+    ("correlator", "endpoint"): "correlator_endpoint",
+    ("correlator", "namespace"): "openlineage_namespace",
+    ("correlator", "api_key"): "correlator_api_key",
+    ("dbt", "project_dir"): "dbt_project_dir",
+    ("dbt", "profiles_dir"): "dbt_profiles_dir",
+    ("job", "name"): "job_name",
+}
+
+# Mapping from CorrelatorConfig field names to CLI option names
+# Used by cli.py to set Click's default_map from config file values
+# Single source of truth - avoid duplication between config.py and cli.py
+CONFIG_TO_CLI_MAPPING: dict[str, str] = {
+    "correlator_endpoint": "correlator_endpoint",
+    "openlineage_namespace": "openlineage_namespace",
+    "correlator_api_key": "correlator_api_key",
+    "dbt_project_dir": "project_dir",
+    "dbt_profiles_dir": "profiles_dir",
+    "job_name": "job_name",
+}
 
 
-class CorrelatorConfig(BaseSettings):
-    """Configuration for dbt-correlator.
+def _interpolate_env_vars(value: str) -> str:
+    """Expand ${VAR_NAME} patterns in string values.
 
-    All settings can be provided via:
-        - Environment variables (CORRELATOR_ENDPOINT, OPENLINEAGE_NAMESPACE, etc.)
-        - Config file (.dbt-correlator.yml) - Implementation in Task 1.5
-        - CLI arguments (override all others)
+    Replaces patterns like ${VAR_NAME} with the corresponding environment
+    variable value. If the environment variable is not set, replaces with
+    an empty string.
 
-    Attributes:
-        correlator_endpoint: Correlator API endpoint URL (required).
-            Example: http://localhost:8080/api/v1/lineage/events
-        openlineage_namespace: Namespace for OpenLineage events (default: "dbt").
-            Used to group related jobs/datasets.
-        correlator_api_key: Optional API key for authentication.
-        dbt_project_dir: dbt project directory (default: ".").
-        dbt_profiles_dir: dbt profiles directory (default: "~/.dbt").
-        job_name: Job name for OpenLineage events (default: "dbt_test_run").
+    Args:
+        value: String potentially containing ${VAR} patterns.
+
+    Returns:
+        String with environment variables expanded.
+
+    Example:
+        >>> os.environ["API_KEY"] = "secret"
+        >>> _interpolate_env_vars("key: ${API_KEY}")
+        "key: secret"
     """
+    # Pattern to match ${VAR_NAME}
+    pattern = r"\$\{([^}]+)\}"
 
-    model_config = SettingsConfigDict(
-        env_prefix="",  # No prefix - use exact names like CORRELATOR_ENDPOINT
-        env_file=".env",
-        env_file_encoding="utf-8",
-        case_sensitive=False,
-        extra="ignore",  # Ignore extra fields
-    )
+    def replace_env_var(match: re.Match[str]) -> str:
+        var_name = match.group(1)
+        return os.environ.get(var_name, "")
 
-    # Correlator configuration
-    correlator_endpoint: str = Field(
-        ...,  # Required field
-        description="Correlator API endpoint URL",
-        examples=["http://localhost:8080/api/v1/lineage/events"],
-    )
+    return re.sub(pattern, replace_env_var, value)
 
-    openlineage_namespace: str = Field(
-        default="dbt",
-        description="Namespace for OpenLineage events",
-        examples=["dbt", "production", "staging"],
-    )
 
-    correlator_api_key: Optional[str] = Field(
-        default=None,
-        description="Optional API key for authentication",
-    )
+def _interpolate_dict_values(data: dict[str, Any]) -> dict[str, Any]:
+    """Recursively interpolate environment variables in dict values.
 
-    # dbt configuration
-    dbt_project_dir: str = Field(
-        default=".",
-        description="Path to dbt project directory",
-    )
+    Args:
+        data: Dictionary with potentially nested string values.
 
-    dbt_profiles_dir: str = Field(
-        default="~/.dbt",
-        description="Path to dbt profiles directory",
-    )
+    Returns:
+        Dictionary with all string values interpolated.
+    """
+    result: dict[str, Any] = {}
+    for key, value in data.items():
+        if isinstance(value, str):
+            result[key] = _interpolate_env_vars(value)
+        elif isinstance(value, dict):
+            result[key] = _interpolate_dict_values(value)
+        else:
+            result[key] = value
+    return result
 
-    # Job configuration
-    job_name: str = Field(
-        default="dbt_test_run",
-        description="Job name for OpenLineage events",
-    )
 
-    def get_run_results_path(self) -> Path:
-        """Get path to dbt run_results.json file.
+def load_yaml_config(config_path: Optional[Path] = None) -> dict[str, Any]:
+    """Load configuration from YAML file.
 
-        Returns:
-            Path to run_results.json in target directory.
-        """
-        return Path(self.dbt_project_dir) / "target" / "run_results.json"
+    Searches for configuration file in the following order:
+    1. Explicit path if provided
+    2. .dbt-correlator.yml or .dbt-correlator.yaml in current working directory
+    3. .dbt-correlator.yml or .dbt-correlator.yaml in user home directory
 
-    def get_manifest_path(self) -> Path:
-        """Get path to dbt manifest.json file.
+    Environment variables in the format ${VAR_NAME} are expanded.
 
-        Returns:
-            Path to manifest.json in target directory.
-        """
-        return Path(self.dbt_project_dir) / "target" / "manifest.json"
+    Args:
+        config_path: Optional explicit path to config file.
+                    If None, searches default locations.
 
-    def validate_paths(self) -> None:
-        """Validate that required dbt artifacts exist.
+    Returns:
+        Dictionary of configuration values (empty dict if no file found).
 
-        Raises:
-            FileNotFoundError: If run_results.json or manifest.json not found.
+    Raises:
+        ValueError: If file exists but contains invalid YAML.
 
-        Note:
-            This is a helper for validation. Implementation in Task 1.5.
-        """
-        run_results = self.get_run_results_path()
-        manifest = self.get_manifest_path()
+    Example:
+        >>> config = load_yaml_config(Path(".dbt-correlator.yml"))
+        >>> config["correlator"]["endpoint"]
+        "http://localhost:8080"
+    """
+    # Determine which path to use
+    if config_path is not None:
+        paths_to_try = [config_path]
+    else:
+        # Search for both .yml and .yaml extensions in cwd and home
+        paths_to_try = []
+        for filename in DEFAULT_CONFIG_FILENAMES:
+            paths_to_try.append(Path.cwd() / filename)
+        for filename in DEFAULT_CONFIG_FILENAMES:
+            paths_to_try.append(Path.home() / filename)
 
-        if not run_results.exists():
-            raise FileNotFoundError(
-                f"run_results.json not found at {run_results}. "
-                f"Please run 'dbt test' first."
-            )
+    # Find first existing config file
+    found_path: Optional[Path] = None
+    for path in paths_to_try:
+        if path.exists():
+            found_path = path
+            break
 
-        if not manifest.exists():
-            raise FileNotFoundError(
-                f"manifest.json not found at {manifest}. "
-                f"Please run 'dbt compile' or 'dbt test' first."
-            )
+    # No config file found
+    if found_path is None:
+        return {}
+
+    # Read and parse YAML
+    try:
+        content = found_path.read_text(encoding="utf-8")
+        data = yaml.safe_load(content)
+
+        # Handle empty file or file with only comments
+        if data is None:
+            return {}
+
+        # Interpolate environment variables in all string values
+        return _interpolate_dict_values(data)
+
+    except yaml.YAMLError as e:
+        raise ValueError(f"Invalid YAML in config file {found_path}: {e}") from e
+
+
+def flatten_config(nested: dict[str, Any]) -> dict[str, Any]:
+    """Flatten nested YAML structure to flat dict with CorrelatorConfig field names.
+
+    Converts nested YAML config structure to flat dictionary with keys
+    matching CorrelatorConfig attribute names.
+
+    Args:
+        nested: Nested dict from YAML (e.g., {"correlator": {"endpoint": "..."}})
+
+    Returns:
+        Flat dict with field names matching CorrelatorConfig attributes.
+
+    Example:
+        >>> flatten_config({"correlator": {"endpoint": "http://..."}})
+        {"correlator_endpoint": "http://..."}
+    """
+    result: dict[str, Any] = {}
+
+    for (section, key), field_name in CONFIG_FIELD_MAPPING.items():
+        if (
+            section in nested
+            and isinstance(nested[section], dict)
+            and key in nested[section]
+        ):
+            result[field_name] = nested[section][key]
+
+    return result
+
+
+def get_run_results_path(project_dir: str) -> Path:
+    """Get path to dbt run_results.json file.
+
+    Args:
+        project_dir: Path to dbt project directory.
+
+    Returns:
+        Path to run_results.json in target directory.
+
+    Example:
+        >>> get_run_results_path(".")
+        PosixPath('target/run_results.json')
+    """
+    return Path(project_dir) / "target" / "run_results.json"
+
+
+def get_manifest_path(project_dir: str) -> Path:
+    """Get path to dbt manifest.json file.
+
+    Args:
+        project_dir: Path to dbt project directory.
+
+    Returns:
+        Path to manifest.json in target directory.
+
+    Example:
+        >>> get_manifest_path(".")
+        PosixPath('target/manifest.json')
+    """
+    return Path(project_dir) / "target" / "manifest.json"
