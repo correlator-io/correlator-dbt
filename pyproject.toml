@@ -265,6 +265,7 @@ skips = [
 dev = [
     "dbt-core>=1.10.15",
     "dbt-duckdb>=1.10.0",
+    "responses>=0.24.0",
     "types-attrs>=19.1.0",
     "types-pyyaml>=6.0.12.20250915",
     "types-requests>=2.32.4.20250913",
