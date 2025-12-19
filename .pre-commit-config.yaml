@@ -52,11 +52,10 @@ repos:
       - id: mypy
         exclude: ^(docs/|tests/fixtures/)
         additional_dependencies:
-          - pydantic
-          - pydantic-settings
           - types-click
           - types-attrs
           - types-requests
+          - types-PyYAML
         args: [--config-file=mypy.ini]
 
   # Security checks with bandit

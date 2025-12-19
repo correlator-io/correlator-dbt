@@ -41,9 +41,8 @@ requires-python = ">=3.9"
 dependencies = [
     "openlineage-python>=1.0.0",
     "click>=8.1.0",
-    "pydantic>=2.0.0",
-    "pydantic-settings>=2.0.0",
     "requests>=2.28.0",  # Explicit dependency for HTTP emission
+    "PyYAML>=6.0",  # YAML config file parsing
 ]
 
 [project.license]
@@ -194,7 +193,7 @@ norecursedirs = [
     "__pycache__",
 ]
 python_files = "test_*.py"
-python_classes = "Test*"
+python_classes = "Test[!R]*"  # Exclude TestResult dataclass from parser.py
 python_functions = "test_*"
 addopts = [
     "--cov=dbt_correlator",
@@ -267,5 +266,6 @@ dev = [
     "dbt-core>=1.10.15",
     "dbt-duckdb>=1.10.0",
     "types-attrs>=19.1.0",
+    "types-pyyaml>=6.0.12.20250915",
     "types-requests>=2.32.4.20250913",
 ]
