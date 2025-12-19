@@ -22,6 +22,7 @@ OpenLineage Specification:
 
 import logging
 from datetime import datetime
+from enum import Enum
 from typing import Any, Optional
 
 import attr
@@ -39,6 +40,29 @@ logger = logging.getLogger(__name__)
 # Plugin version for producer field
 __version__ = "0.1.0"
 PRODUCER = f"https://github.com/correlator-io/dbt-correlator/{__version__}"
+
+
+def _serialize_attr_value(
+    inst: Any,  # noqa: ARG001
+    field: Any,  # noqa: ARG001
+    value: Any,
+) -> Any:
+    """Serialize attrs field values, converting Enums to their string values.
+
+    This function is used as the value_serializer for attr.asdict() to handle
+    Enum types (like EventType) that are not JSON serializable by default.
+
+    Args:
+        inst: The attrs instance being serialized (unused, required by API).
+        field: The attrs field being serialized (unused, required by API).
+        value: The value to serialize.
+
+    Returns:
+        The serialized value (Enum.value for Enums, original value otherwise).
+    """
+    if isinstance(value, Enum):
+        return value.value
+    return value
 
 
 def create_wrapping_event(
@@ -285,7 +309,11 @@ def emit_events(
 
     # Serialize events to JSON array (batch format)
     # v2 events use attrs, so use attr.asdict() for serialization
-    event_dicts = [attr.asdict(event) for event in events]
+    # Note: value_serializer is valid but not in type stubs
+    event_dicts = [
+        attr.asdict(event, value_serializer=_serialize_attr_value)  # type: ignore[call-arg]
+        for event in events
+    ]
 
     try:
         # Single HTTP POST with all events
