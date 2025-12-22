@@ -9,7 +9,6 @@ Test Coverage:
     - extract_dataset_info(): Resolve dataset from test node
     - map_test_status(): Map dbt status to boolean
 
-Implementation: Task 1.2 - dbt Artifact Parser
 """
 
 import json
@@ -27,6 +26,7 @@ from dbt_correlator.parser import (
     DatasetInfo,
     DatasetLocation,
     Manifest,
+    ModelExecutionResult,
     ModelLineage,
     RunResults,
     RunResultsMetadata,
@@ -43,13 +43,15 @@ from dbt_correlator.parser import (
     get_models_with_tests,
     map_test_status,
     parse_manifest,
+    parse_model_results,
     parse_run_results,
 )
 
 # Path to test fixtures
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
-RUN_RESULTS_PATH = FIXTURES_DIR / "run_results.json"
+DBT_TEST_RESULTS_PATH = FIXTURES_DIR / "dbt_test_results.json"
 MANIFEST_PATH = FIXTURES_DIR / "manifest.json"
+DBT_RUN_RESULTS_PATH = FIXTURES_DIR / "dbt_run_results.json"
 
 # Valid test status values (dbt test statuses)
 VALID_TEST_STATUSES = {"pass", "fail", "error", "skipped", "warn"}
@@ -70,10 +72,10 @@ def test_parse_run_results() -> None:
         - Schema version compatibility is handled
 
     Uses:
-        - tests/fixtures/run_results.json (jaffle shop, 30 tests, dbt 1.10.15)
+        - tests/fixtures/dbt_test_results.json (jaffle shop, 30 tests, dbt 1.10.15)
     """
     # Act: Parse the run_results.json fixture
-    result = parse_run_results(str(RUN_RESULTS_PATH))
+    result = parse_run_results(str(DBT_TEST_RESULTS_PATH))
 
     # Assert: Verify it returns RunResults instance
     assert isinstance(result, RunResults), "Should return RunResults instance"
@@ -97,7 +99,7 @@ def test_parse_run_results() -> None:
     )
     assert first_test.status == "pass"
     # Fixture value: 0.030359268188476562 (more precise check)
-    assert first_test.execution_time == pytest.approx(0.030359, abs=0.0001)
+    assert first_test.execution_time_seconds == pytest.approx(0.030359, abs=0.0001)
     assert first_test.failures == 0
     assert first_test.thread_id == "Thread-1 (worker)"
     assert first_test.compiled_code is not None
@@ -117,10 +119,10 @@ def test_parse_run_results_with_multiple_tests() -> None:
         - Different test types (unique, not_null, relationships, etc.)
 
     Uses:
-        - tests/fixtures/run_results.json (all passing tests from jaffle shop)
+        - tests/fixtures/dbt_test_results.json (all passing tests from jaffle shop)
     """
     # Act: Parse the run_results.json fixture
-    result = parse_run_results(str(RUN_RESULTS_PATH))
+    result = parse_run_results(str(DBT_TEST_RESULTS_PATH))
 
     # Assert: All 30 tests extracted
     assert len(result.results) == 30, "Should extract all 30 tests"
@@ -144,7 +146,7 @@ def test_parse_run_results_with_multiple_tests() -> None:
         ), f"Status must be one of {VALID_TEST_STATUSES}, got: {test.status}"
 
         # Validate numeric fields
-        assert test.execution_time >= 0, "Execution time must be non-negative"
+        assert test.execution_time_seconds >= 0, "Execution time must be non-negative"
         assert test.failures is not None, "Each test must have failures count"
         assert isinstance(test.failures, int), "Failures must be integer"
         assert test.failures >= 0, "Failures count must be non-negative"
@@ -153,7 +155,7 @@ def test_parse_run_results_with_multiple_tests() -> None:
         assert test.thread_id, "Each test must have thread_id"
 
     # Assert: Execution times vary across tests
-    execution_times = [test.execution_time for test in result.results]
+    execution_times = [test.execution_time_seconds for test in result.results]
     assert len(set(execution_times)) > 1, "Tests should have varied execution times"
     assert min(execution_times) >= 0, "Min execution time should be non-negative"
     assert max(execution_times) < 10, "Max execution time should be reasonable (<10s)"
@@ -335,7 +337,7 @@ def test_parse_run_results_openlineage_compliance() -> None:
     This ensures parser output is directly usable by emitter module.
     """
     # Act: Parse the run_results.json fixture
-    result = parse_run_results(str(RUN_RESULTS_PATH))
+    result = parse_run_results(str(DBT_TEST_RESULTS_PATH))
 
     # Assert: Timestamp is valid datetime object (OpenLineage eventTime requirement)
     assert isinstance(
@@ -876,7 +878,7 @@ def test_map_test_status_skipped() -> None:
 
 
 # =============================================================================
-# Task 1.7: Lineage Extraction Tests
+# Lineage Extraction Tests
 # =============================================================================
 
 
@@ -1259,7 +1261,7 @@ def test_get_models_with_tests_returns_unique_models() -> None:
         - Returns unique set (no duplicates even if multiple tests per model)
     """
     # Arrange: Parse run_results and manifest from fixtures
-    run_results = parse_run_results(str(RUN_RESULTS_PATH))
+    run_results = parse_run_results(str(DBT_TEST_RESULTS_PATH))
     manifest = parse_manifest(str(MANIFEST_PATH))
 
     # Act: Get models with tests
@@ -1284,7 +1286,7 @@ def test_get_models_with_tests_handles_multiple_tests_per_model() -> None:
         - Deduplication works correctly
     """
     # Arrange: Parse fixtures - customers model has multiple tests
-    run_results = parse_run_results(str(RUN_RESULTS_PATH))
+    run_results = parse_run_results(str(DBT_TEST_RESULTS_PATH))
     manifest = parse_manifest(str(MANIFEST_PATH))
 
     # Act: Get models with tests
@@ -1346,17 +1348,17 @@ def test_get_executed_models_returns_model_ids() -> None:
             TestResult(
                 unique_id="model.jaffle_shop.customers",
                 status="success",
-                execution_time=1.5,
+                execution_time_seconds=1.5,
             ),
             TestResult(
                 unique_id="model.jaffle_shop.orders",
                 status="success",
-                execution_time=2.0,
+                execution_time_seconds=2.0,
             ),
             TestResult(
                 unique_id="model.jaffle_shop.stg_customers",
                 status="success",
-                execution_time=0.5,
+                execution_time_seconds=0.5,
             ),
         ],
     )
@@ -1393,22 +1395,22 @@ def test_get_executed_models_filters_non_models() -> None:
             TestResult(
                 unique_id="model.jaffle_shop.customers",
                 status="success",
-                execution_time=1.5,
+                execution_time_seconds=1.5,
             ),
             TestResult(
                 unique_id="test.jaffle_shop.unique_customers_id.abc123",
                 status="pass",
-                execution_time=0.1,
+                execution_time_seconds=0.1,
             ),
             TestResult(
                 unique_id="seed.jaffle_shop.raw_customers",
                 status="success",
-                execution_time=0.3,
+                execution_time_seconds=0.3,
             ),
             TestResult(
                 unique_id="model.jaffle_shop.orders",
                 status="success",
-                execution_time=2.0,
+                execution_time_seconds=2.0,
             ),
         ],
     )
@@ -1574,3 +1576,342 @@ def test_extract_all_model_lineage_empty_filter() -> None:
 
     # Assert: Empty list returned
     assert lineages == []
+
+
+# =============================================================================
+# Runtime Metrics Extraction Tests
+# =============================================================================
+
+
+@pytest.mark.unit
+def test_model_execution_result_dataclass_creation() -> None:
+    """Test ModelExecutionResult dataclass creation and attributes.
+
+    Validates:
+        - Dataclass can be instantiated with all fields
+        - All fields are accessible
+        - Optional fields default to None
+    """
+    # Arrange & Act: Create instance with all fields
+    result = ModelExecutionResult(
+        unique_id="model.jaffle_shop.customers",
+        status="success",
+        execution_time_seconds=1.5,
+        rows_affected=100,
+        message="OK",
+    )
+
+    # Assert: All fields accessible
+    assert result.unique_id == "model.jaffle_shop.customers"
+    assert result.status == "success"
+    assert result.execution_time_seconds == 1.5
+    assert result.rows_affected == 100
+    assert result.message == "OK"
+
+
+@pytest.mark.unit
+def test_model_execution_result_optional_fields() -> None:
+    """Test ModelExecutionResult with optional fields as None.
+
+    Validates:
+        - rows_affected can be None (some adapters don't provide it)
+        - message can be None
+    """
+    # Arrange & Act: Create instance with optional fields as None
+    result = ModelExecutionResult(
+        unique_id="model.jaffle_shop.orders",
+        status="success",
+        execution_time_seconds=0.5,
+        rows_affected=None,
+        message=None,
+    )
+
+    # Assert: Optional fields are None
+    assert result.rows_affected is None
+    assert result.message is None
+
+
+@pytest.mark.unit
+def test_parse_model_results_from_fixture() -> None:
+    """Test parsing model execution results from real dbt run output.
+
+    Validates:
+        - Parses dbt_run_results.json correctly
+        - Returns dictionary keyed by unique_id
+        - Extracts execution_time correctly
+    """
+    # Arrange: Parse run_results from dbt run
+    run_results = parse_run_results(str(DBT_RUN_RESULTS_PATH))
+
+    # Act: Parse model results
+    model_results = parse_model_results(run_results)
+
+    # Assert: Returns dictionary
+    assert isinstance(model_results, dict)
+    assert len(model_results) > 0
+
+    # Assert: All keys are model unique_ids
+    for unique_id in model_results:
+        assert unique_id.startswith("model.")
+
+    # Assert: Contains expected models from jaffle_shop
+    assert "model.jaffle_shop.customers" in model_results
+    assert "model.jaffle_shop.orders" in model_results
+    assert "model.jaffle_shop.stg_customers" in model_results
+
+
+@pytest.mark.unit
+def test_parse_model_results_extracts_execution_time() -> None:
+    """Test that parse_model_results extracts execution_time correctly.
+
+    Validates:
+        - execution_time_seconds is extracted from run_results
+        - Value is a positive float
+    """
+    # Arrange: Parse run_results
+    run_results = parse_run_results(str(DBT_RUN_RESULTS_PATH))
+
+    # Act: Parse model results
+    model_results = parse_model_results(run_results)
+
+    # Assert: Execution time is extracted as positive float
+    customers_result = model_results["model.jaffle_shop.customers"]
+    assert customers_result.execution_time_seconds > 0
+    assert isinstance(customers_result.execution_time_seconds, float)
+
+
+@pytest.mark.unit
+def test_parse_model_results_extracts_status() -> None:
+    """Test that parse_model_results extracts status correctly.
+
+    Validates:
+        - status field is extracted (success, error, skipped)
+    """
+    # Arrange: Parse run_results
+    run_results = parse_run_results(str(DBT_RUN_RESULTS_PATH))
+
+    # Act: Parse model results
+    model_results = parse_model_results(run_results)
+
+    # Assert: Status is extracted
+    customers_result = model_results["model.jaffle_shop.customers"]
+    assert customers_result.status == "success"
+
+
+@pytest.mark.unit
+def test_parse_model_results_handles_missing_rows_affected() -> None:
+    """Test that parse_model_results handles missing rows_affected.
+
+    Validates:
+        - rows_affected is None when adapter doesn't provide it
+        - DuckDB adapter doesn't return row counts
+    """
+    # Arrange: Parse run_results (DuckDB doesn't return rows_affected)
+    run_results = parse_run_results(str(DBT_RUN_RESULTS_PATH))
+
+    # Act: Parse model results
+    model_results = parse_model_results(run_results)
+
+    # Assert: rows_affected is None for DuckDB
+    customers_result = model_results["model.jaffle_shop.customers"]
+    assert customers_result.rows_affected is None
+
+
+@pytest.mark.unit
+def test_parse_model_results_extracts_rows_affected_when_present() -> None:
+    """Test that parse_model_results extracts rows_affected when adapter provides it.
+
+    Validates:
+        - rows_affected is extracted from adapter_response when present
+        - Some adapters (Postgres, Snowflake) return this value
+    """
+    # Arrange: Create run_results with rows_affected in adapter_response
+    run_results = RunResults(
+        metadata=RunResultsMetadata(
+            generated_at=datetime.now(timezone.utc),
+            invocation_id="test-run-id",
+            dbt_version="1.10.0",
+            elapsed_time=5.0,
+        ),
+        results=[
+            TestResult(
+                unique_id="model.project.customers",
+                status="success",
+                execution_time_seconds=1.5,
+                message="CREATE TABLE",
+                adapter_response={
+                    "_message": "CREATE TABLE",
+                    "rows_affected": 1500,  # Postgres-style response
+                },
+            ),
+        ],
+    )
+
+    # Act: Parse model results
+    model_results = parse_model_results(run_results)
+
+    # Assert: rows_affected is extracted
+    assert "model.project.customers" in model_results
+    assert model_results["model.project.customers"].rows_affected == 1500
+
+
+@pytest.mark.unit
+def test_parse_model_results_filters_non_model_results() -> None:
+    """Test that parse_model_results ignores non-model results.
+
+    Validates:
+        - test.* results are ignored
+        - seed.* results are ignored
+        - Only model.* results are included
+    """
+    # Arrange: Create run_results with mixed types (like dbt build output)
+    run_results = RunResults(
+        metadata=RunResultsMetadata(
+            generated_at=datetime.now(timezone.utc),
+            invocation_id="build-run-id",
+            dbt_version="1.10.0",
+            elapsed_time=10.0,
+        ),
+        results=[
+            TestResult(
+                unique_id="model.project.customers",
+                status="success",
+                execution_time_seconds=1.5,
+            ),
+            TestResult(
+                unique_id="test.project.unique_customers_id.abc123",
+                status="pass",
+                execution_time_seconds=0.05,
+            ),
+            TestResult(
+                unique_id="seed.project.raw_data",
+                status="success",
+                execution_time_seconds=0.2,
+            ),
+            TestResult(
+                unique_id="model.project.orders",
+                status="success",
+                execution_time_seconds=2.0,
+            ),
+        ],
+    )
+
+    # Act: Parse model results
+    model_results = parse_model_results(run_results)
+
+    # Assert: Only model results included
+    assert len(model_results) == 2
+    assert "model.project.customers" in model_results
+    assert "model.project.orders" in model_results
+    assert "test.project.unique_customers_id.abc123" not in model_results
+    assert "seed.project.raw_data" not in model_results
+
+
+@pytest.mark.unit
+def test_parse_model_results_empty_run_results() -> None:
+    """Test that parse_model_results handles empty run_results.
+
+    Validates:
+        - Empty run_results returns empty dictionary
+        - No errors on empty input
+    """
+    # Arrange: Create empty run_results
+    run_results = RunResults(
+        metadata=RunResultsMetadata(
+            generated_at=datetime.now(timezone.utc),
+            invocation_id="empty-run-id",
+            dbt_version="1.10.0",
+            elapsed_time=0.0,
+        ),
+        results=[],
+    )
+
+    # Act: Parse model results
+    model_results = parse_model_results(run_results)
+
+    # Assert: Empty dictionary returned
+    assert model_results == {}
+
+
+@pytest.mark.unit
+def test_parse_model_results_handles_error_status() -> None:
+    """Test that parse_model_results handles error status models.
+
+    Validates:
+        - Error status models are included
+        - Message contains error information
+    """
+    # Arrange: Create run_results with error model
+    run_results = RunResults(
+        metadata=RunResultsMetadata(
+            generated_at=datetime.now(timezone.utc),
+            invocation_id="error-run-id",
+            dbt_version="1.10.0",
+            elapsed_time=2.0,
+        ),
+        results=[
+            TestResult(
+                unique_id="model.project.broken_model",
+                status="error",
+                execution_time_seconds=0.5,
+                message="Compilation Error: column 'missing_col' not found",
+            ),
+        ],
+    )
+
+    # Act: Parse model results
+    model_results = parse_model_results(run_results)
+
+    # Assert: Error model is included with error status
+    assert "model.project.broken_model" in model_results
+    broken_result = model_results["model.project.broken_model"]
+    assert broken_result.status == "error"
+    assert "missing_col" in (broken_result.message or "")
+
+
+@pytest.mark.unit
+def test_parse_model_results_handles_skipped_status() -> None:
+    """Test that parse_model_results handles skipped status models.
+
+    Validates:
+        - Skipped models are included in results
+        - status field is correctly set to "skipped"
+        - Skipped models have execution_time but usually no message
+    """
+    # Arrange: Create run_results with skipped model
+    run_results = RunResults(
+        metadata=RunResultsMetadata(
+            generated_at=datetime.now(timezone.utc),
+            invocation_id="skipped-run-id",
+            dbt_version="1.10.0",
+            elapsed_time=1.0,
+        ),
+        results=[
+            TestResult(
+                unique_id="model.project.upstream_model",
+                status="success",
+                execution_time_seconds=1.0,
+            ),
+            TestResult(
+                unique_id="model.project.dependent_model",
+                status="skipped",
+                execution_time_seconds=0.0,
+                message="SKIP relation project.upstream_model does not exist",
+            ),
+        ],
+    )
+
+    # Act: Parse model results
+    model_results = parse_model_results(run_results)
+
+    # Assert: Both models are included
+    assert len(model_results) == 2
+    assert "model.project.upstream_model" in model_results
+    assert "model.project.dependent_model" in model_results
+
+    # Assert: Skipped model has correct status
+    skipped_result = model_results["model.project.dependent_model"]
+    assert skipped_result.status == "skipped"
+    assert skipped_result.execution_time_seconds == 0.0
+    assert skipped_result.message is not None
+    assert "SKIP" in skipped_result.message

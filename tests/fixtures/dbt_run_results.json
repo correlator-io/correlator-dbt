@@ -1,0 +1,420 @@
+{
+  "metadata": {
+    "dbt_schema_version": "https://schemas.getdbt.com/dbt/run-results/v6.json",
+    "dbt_version": "1.10.15",
+    "generated_at": "2025-12-22T07:12:31.525617Z",
+    "invocation_id": "27cdf959-cf17-4122-a38a-157716368f96",
+    "invocation_started_at": "2025-12-22T07:12:30.291582Z",
+    "env": {}
+  },
+  "results": [
+    {
+      "status": "success",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-22T07:12:31.167563Z",
+          "completed_at": "2025-12-22T07:12:31.175188Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-22T07:12:31.175378Z",
+          "completed_at": "2025-12-22T07:12:31.234036Z"
+        }
+      ],
+      "thread_id": "Thread-2 (worker)",
+      "execution_time": 0.08386707305908203,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": "OK",
+      "failures": null,
+      "unique_id": "model.jaffle_shop.stg_customers",
+      "compiled": true,
+      "compiled_code": "with\n\nsource as (\n\n    select * from \"jaffle_shop\".\"raw\".\"raw_customers\"\n\n),\n\nrenamed as (\n\n    select\n\n        ----------  ids\n        id as customer_id,\n\n        ---------- text\n        name as customer_name\n\n    from source\n\n)\n\nselect * from renamed",
+      "relation_name": "\"jaffle_shop\".\"main\".\"stg_customers\"",
+      "batch_results": null
+    },
+    {
+      "status": "success",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-22T07:12:31.172716Z",
+          "completed_at": "2025-12-22T07:12:31.187390Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-22T07:12:31.188950Z",
+          "completed_at": "2025-12-22T07:12:31.236346Z"
+        }
+      ],
+      "thread_id": "Thread-3 (worker)",
+      "execution_time": 0.08658003807067871,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": "OK",
+      "failures": null,
+      "unique_id": "model.jaffle_shop.stg_locations",
+      "compiled": true,
+      "compiled_code": "with\n\nsource as (\n\n    select * from \"jaffle_shop\".\"raw\".\"raw_stores\"\n\n),\n\nrenamed as (\n\n    select\n\n        ----------  ids\n        id as location_id,\n\n        ---------- text\n        name as location_name,\n\n        ---------- numerics\n        tax_rate,\n\n        ---------- timestamps\n        date_trunc('day', opened_at) as opened_date\n\n    from source\n\n)\n\nselect * from renamed",
+      "relation_name": "\"jaffle_shop\".\"main\".\"stg_locations\"",
+      "batch_results": null
+    },
+    {
+      "status": "success",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-22T07:12:31.151566Z",
+          "completed_at": "2025-12-22T07:12:31.187146Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-22T07:12:31.187613Z",
+          "completed_at": "2025-12-22T07:12:31.235858Z"
+        }
+      ],
+      "thread_id": "Thread-4 (worker)",
+      "execution_time": 0.08682012557983398,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": "OK",
+      "failures": null,
+      "unique_id": "model.jaffle_shop.stg_order_items",
+      "compiled": true,
+      "compiled_code": "with\n\nsource as (\n\n    select * from \"jaffle_shop\".\"raw\".\"raw_items\"\n\n),\n\nrenamed as (\n\n    select\n\n        ----------  ids\n        id as order_item_id,\n        order_id,\n        sku as product_id\n\n    from source\n\n)\n\nselect * from renamed",
+      "relation_name": "\"jaffle_shop\".\"main\".\"stg_order_items\"",
+      "batch_results": null
+    },
+    {
+      "status": "success",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-22T07:12:31.155859Z",
+          "completed_at": "2025-12-22T07:12:31.195223Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-22T07:12:31.195742Z",
+          "completed_at": "2025-12-22T07:12:31.264339Z"
+        }
+      ],
+      "thread_id": "Thread-1 (worker)",
+      "execution_time": 0.11448001861572266,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": "OK",
+      "failures": null,
+      "unique_id": "model.jaffle_shop.metricflow_time_spine",
+      "compiled": true,
+      "compiled_code": "-- metricflow_time_spine.sql\nwith\n\ndays as (\n\n    --for BQ adapters use \"DATE('01/01/2000','mm/dd/yyyy')\"\n    \n    with date_spine as\n(\n\n    \n\n\n\n\n\nwith rawdata as (\n\n    \n\n    \n\n    with p as (\n        select 0 as generated_number union all select 1\n    ), unioned as (\n\n    select\n\n    \n    p0.generated_number * power(2, 0)\n     + \n    \n    p1.generated_number * power(2, 1)\n     + \n    \n    p2.generated_number * power(2, 2)\n     + \n    \n    p3.generated_number * power(2, 3)\n     + \n    \n    p4.generated_number * power(2, 4)\n     + \n    \n    p5.generated_number * power(2, 5)\n     + \n    \n    p6.generated_number * power(2, 6)\n     + \n    \n    p7.generated_number * power(2, 7)\n     + \n    \n    p8.generated_number * power(2, 8)\n     + \n    \n    p9.generated_number * power(2, 9)\n     + \n    \n    p10.generated_number * power(2, 10)\n     + \n    \n    p11.generated_number * power(2, 11)\n    \n    \n    + 1\n    as generated_number\n\n    from\n\n    \n    p as p0\n     cross join \n    \n    p as p1\n     cross join \n    \n    p as p2\n     cross join \n    \n    p as p3\n     cross join \n    \n    p as p4\n     cross join \n    \n    p as p5\n     cross join \n    \n    p as p6\n     cross join \n    \n    p as p7\n     cross join \n    \n    p as p8\n     cross join \n    \n    p as p9\n     cross join \n    \n    p as p10\n     cross join \n    \n    p as p11\n    \n    \n\n    )\n\n    select *\n    from unioned\n    where generated_number <= 3651\n    order by generated_number\n\n\n\n),\n\nall_periods as (\n\n    select (\n        \n\n    (\n\n    (cast(cast(\n    cast(now() as timestamp)\n        at time zone 'UTC' at time zone 'America/Los_Angeles' as timestamp\n) as date) + cast(-3650 as bigint) * interval 1 day) + cast((row_number() over (order by 1) - 1) as bigint) * interval 1 day)\n    ) as date_day\n    from rawdata\n\n),\n\nfiltered as (\n\n    select *\n    from all_periods\n    where date_day <= cast(\n\n    (cast(cast(\n    cast(now() as timestamp)\n        at time zone 'UTC' at time zone 'America/Los_Angeles' as timestamp\n) as date) + cast(1 as bigint) * interval 1 day) as date)\n\n)\n\nselect * from filtered\n\n\n\n)\nselect\n    cast(d.date_day as timestamp) as date_day\nfrom\n    date_spine d\n\n\n\n),\n\ncast_to_date as (\n\n    select cast(date_day as date) as date_day\n\n    from days\n\n)\n\nselect * from cast_to_date",
+      "relation_name": "\"jaffle_shop\".\"main\".\"metricflow_time_spine\"",
+      "batch_results": null
+    },
+    {
+      "status": "success",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-22T07:12:31.247871Z",
+          "completed_at": "2025-12-22T07:12:31.254129Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-22T07:12:31.255645Z",
+          "completed_at": "2025-12-22T07:12:31.284502Z"
+        }
+      ],
+      "thread_id": "Thread-3 (worker)",
+      "execution_time": 0.04343295097351074,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": "OK",
+      "failures": null,
+      "unique_id": "model.jaffle_shop.stg_products",
+      "compiled": true,
+      "compiled_code": "with\n\nsource as (\n\n    select * from \"jaffle_shop\".\"raw\".\"raw_products\"\n\n),\n\nrenamed as (\n\n    select\n\n        ----------  ids\n        sku as product_id,\n\n        ---------- text\n        name as product_name,\n        type as product_type,\n        description as product_description,\n\n\n        ---------- numerics\n        (price / 100)::numeric(16, 2) as product_price,\n\n        ---------- booleans\n        coalesce(type = 'jaffle', false) as is_food_item,\n\n        coalesce(type = 'beverage', false) as is_drink_item\n\n    from source\n\n)\n\nselect * from renamed",
+      "relation_name": "\"jaffle_shop\".\"main\".\"stg_products\"",
+      "batch_results": null
+    },
+    {
+      "status": "success",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-22T07:12:31.248833Z",
+          "completed_at": "2025-12-22T07:12:31.255516Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-22T07:12:31.258135Z",
+          "completed_at": "2025-12-22T07:12:31.285199Z"
+        }
+      ],
+      "thread_id": "Thread-4 (worker)",
+      "execution_time": 0.044049978256225586,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": "OK",
+      "failures": null,
+      "unique_id": "model.jaffle_shop.stg_supplies",
+      "compiled": true,
+      "compiled_code": "with\n\nsource as (\n\n    select * from \"jaffle_shop\".\"raw\".\"raw_supplies\"\n\n),\n\nrenamed as (\n\n    select\n\n        ----------  ids\n        md5(cast(coalesce(cast(id as TEXT), '_dbt_utils_surrogate_key_null_') || '-' || coalesce(cast(sku as TEXT), '_dbt_utils_surrogate_key_null_') as TEXT)) as supply_uuid,\n        id as supply_id,\n        sku as product_id,\n\n        ---------- text\n        name as supply_name,\n\n        ---------- numerics\n        (cost / 100)::numeric(16, 2) as supply_cost,\n\n        ---------- booleans\n        perishable as is_perishable_supply\n\n    from source\n\n)\n\nselect * from renamed",
+      "relation_name": "\"jaffle_shop\".\"main\".\"stg_supplies\"",
+      "batch_results": null
+    },
+    {
+      "status": "success",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-22T07:12:31.243021Z",
+          "completed_at": "2025-12-22T07:12:31.253981Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-22T07:12:31.254384Z",
+          "completed_at": "2025-12-22T07:12:31.286076Z"
+        }
+      ],
+      "thread_id": "Thread-2 (worker)",
+      "execution_time": 0.045042991638183594,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": "OK",
+      "failures": null,
+      "unique_id": "model.jaffle_shop.stg_orders",
+      "compiled": true,
+      "compiled_code": "with\n\nsource as (\n\n    select * from \"jaffle_shop\".\"raw\".\"raw_orders\"\n\n),\n\nrenamed as (\n\n    select\n\n        ----------  ids\n        id as order_id,\n        store_id as location_id,\n        customer as customer_id,\n\n        ---------- numerics\n        subtotal as subtotal_cents,\n        tax_paid as tax_paid_cents,\n        order_total as order_total_cents,\n        (subtotal / 100)::numeric(16, 2) as subtotal,\n        (tax_paid / 100)::numeric(16, 2) as tax_paid,\n        (order_total / 100)::numeric(16, 2) as order_total,\n\n        ---------- timestamps\n        date_trunc('day', ordered_at) as ordered_at\n\n    from source\n\n)\n\nselect * from renamed",
+      "relation_name": "\"jaffle_shop\".\"main\".\"stg_orders\"",
+      "batch_results": null
+    },
+    {
+      "status": "success",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-22T07:12:31.274530Z",
+          "completed_at": "2025-12-22T07:12:31.277855Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-22T07:12:31.278479Z",
+          "completed_at": "2025-12-22T07:12:31.312679Z"
+        }
+      ],
+      "thread_id": "Thread-1 (worker)",
+      "execution_time": 0.040212154388427734,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": "OK",
+      "failures": null,
+      "unique_id": "model.jaffle_shop.locations",
+      "compiled": true,
+      "compiled_code": "with\n\nlocations as (\n\n    select * from \"jaffle_shop\".\"main\".\"stg_locations\"\n\n)\n\nselect * from locations",
+      "relation_name": "\"jaffle_shop\".\"main\".\"locations\"",
+      "batch_results": null
+    },
+    {
+      "status": "success",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-22T07:12:31.292527Z",
+          "completed_at": "2025-12-22T07:12:31.296025Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-22T07:12:31.297594Z",
+          "completed_at": "2025-12-22T07:12:31.326617Z"
+        }
+      ],
+      "thread_id": "Thread-2 (worker)",
+      "execution_time": 0.03711700439453125,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": "OK",
+      "failures": null,
+      "unique_id": "model.jaffle_shop.supplies",
+      "compiled": true,
+      "compiled_code": "with\n\nsupplies as (\n\n    select * from \"jaffle_shop\".\"main\".\"stg_supplies\"\n\n)\n\nselect * from supplies",
+      "relation_name": "\"jaffle_shop\".\"main\".\"supplies\"",
+      "batch_results": null
+    },
+    {
+      "status": "success",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-22T07:12:31.290981Z",
+          "completed_at": "2025-12-22T07:12:31.295875Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-22T07:12:31.296169Z",
+          "completed_at": "2025-12-22T07:12:31.327294Z"
+        }
+      ],
+      "thread_id": "Thread-3 (worker)",
+      "execution_time": 0.03789496421813965,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": "OK",
+      "failures": null,
+      "unique_id": "model.jaffle_shop.products",
+      "compiled": true,
+      "compiled_code": "with\n\nproducts as (\n\n    select * from \"jaffle_shop\".\"main\".\"stg_products\"\n\n)\n\nselect * from products",
+      "relation_name": "\"jaffle_shop\".\"main\".\"products\"",
+      "batch_results": null
+    },
+    {
+      "status": "success",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-22T07:12:31.293619Z",
+          "completed_at": "2025-12-22T07:12:31.297446Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-22T07:12:31.301059Z",
+          "completed_at": "2025-12-22T07:12:31.362388Z"
+        }
+      ],
+      "thread_id": "Thread-4 (worker)",
+      "execution_time": 0.0720059871673584,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": "OK",
+      "failures": null,
+      "unique_id": "model.jaffle_shop.order_items",
+      "compiled": true,
+      "compiled_code": "with\n\norder_items as (\n\n    select * from \"jaffle_shop\".\"main\".\"stg_order_items\"\n\n),\n\n\norders as (\n\n    select * from \"jaffle_shop\".\"main\".\"stg_orders\"\n\n),\n\nproducts as (\n\n    select * from \"jaffle_shop\".\"main\".\"stg_products\"\n\n),\n\nsupplies as (\n\n    select * from \"jaffle_shop\".\"main\".\"stg_supplies\"\n\n),\n\norder_supplies_summary as (\n\n    select\n        product_id,\n\n        sum(supply_cost) as supply_cost\n\n    from supplies\n\n    group by 1\n\n),\n\njoined as (\n\n    select\n        order_items.*,\n\n        orders.ordered_at,\n\n        products.product_name,\n        products.product_price,\n        products.is_food_item,\n        products.is_drink_item,\n\n        order_supplies_summary.supply_cost\n\n    from order_items\n\n    left join orders on order_items.order_id = orders.order_id\n\n    left join products on order_items.product_id = products.product_id\n\n    left join order_supplies_summary\n        on order_items.product_id = order_supplies_summary.product_id\n\n)\n\nselect * from joined",
+      "relation_name": "\"jaffle_shop\".\"main\".\"order_items\"",
+      "batch_results": null
+    },
+    {
+      "status": "success",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-22T07:12:31.364287Z",
+          "completed_at": "2025-12-22T07:12:31.365818Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-22T07:12:31.365969Z",
+          "completed_at": "2025-12-22T07:12:31.499352Z"
+        }
+      ],
+      "thread_id": "Thread-1 (worker)",
+      "execution_time": 0.13557720184326172,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": "OK",
+      "failures": null,
+      "unique_id": "model.jaffle_shop.orders",
+      "compiled": true,
+      "compiled_code": "with\n\norders as (\n\n    select * from \"jaffle_shop\".\"main\".\"stg_orders\"\n\n),\n\norder_items as (\n\n    select * from \"jaffle_shop\".\"main\".\"order_items\"\n\n),\n\norder_items_summary as (\n\n    select\n        order_id,\n\n        sum(supply_cost) as order_cost,\n        sum(product_price) as order_items_subtotal,\n        count(order_item_id) as count_order_items,\n        sum(\n            case\n                when is_food_item then 1\n                else 0\n            end\n        ) as count_food_items,\n        sum(\n            case\n                when is_drink_item then 1\n                else 0\n            end\n        ) as count_drink_items\n\n    from order_items\n\n    group by 1\n\n),\n\ncompute_booleans as (\n\n    select\n        orders.*,\n\n        order_items_summary.order_cost,\n        order_items_summary.order_items_subtotal,\n        order_items_summary.count_food_items,\n        order_items_summary.count_drink_items,\n        order_items_summary.count_order_items,\n        order_items_summary.count_food_items > 0 as is_food_order,\n        order_items_summary.count_drink_items > 0 as is_drink_order\n\n    from orders\n\n    left join\n        order_items_summary\n        on orders.order_id = order_items_summary.order_id\n\n),\n\ncustomer_order_count as (\n\n    select\n        *,\n\n        row_number() over (\n            partition by customer_id\n            order by ordered_at asc\n        ) as customer_order_number\n\n    from compute_booleans\n\n)\n\nselect * from customer_order_count",
+      "relation_name": "\"jaffle_shop\".\"main\".\"orders\"",
+      "batch_results": null
+    },
+    {
+      "status": "success",
+      "timing": [
+        {
+          "name": "compile",
+          "started_at": "2025-12-22T07:12:31.501024Z",
+          "completed_at": "2025-12-22T07:12:31.502768Z"
+        },
+        {
+          "name": "execute",
+          "started_at": "2025-12-22T07:12:31.502906Z",
+          "completed_at": "2025-12-22T07:12:31.522367Z"
+        }
+      ],
+      "thread_id": "Thread-2 (worker)",
+      "execution_time": 0.021851301193237305,
+      "adapter_response": {
+        "_message": "OK"
+      },
+      "message": "OK",
+      "failures": null,
+      "unique_id": "model.jaffle_shop.customers",
+      "compiled": true,
+      "compiled_code": "with\n\ncustomers as (\n\n    select * from \"jaffle_shop\".\"main\".\"stg_customers\"\n\n),\n\norders as (\n\n    select * from \"jaffle_shop\".\"main\".\"orders\"\n\n),\n\ncustomer_orders_summary as (\n\n    select\n        orders.customer_id,\n\n        count(distinct orders.order_id) as count_lifetime_orders,\n        count(distinct orders.order_id) > 1 as is_repeat_buyer,\n        min(orders.ordered_at) as first_ordered_at,\n        max(orders.ordered_at) as last_ordered_at,\n        sum(orders.subtotal) as lifetime_spend_pretax,\n        sum(orders.tax_paid) as lifetime_tax_paid,\n        sum(orders.order_total) as lifetime_spend\n\n    from orders\n\n    group by 1\n\n),\n\njoined as (\n\n    select\n        customers.*,\n\n        customer_orders_summary.count_lifetime_orders,\n        customer_orders_summary.first_ordered_at,\n        customer_orders_summary.last_ordered_at,\n        customer_orders_summary.lifetime_spend_pretax,\n        customer_orders_summary.lifetime_tax_paid,\n        customer_orders_summary.lifetime_spend,\n\n        case\n            when customer_orders_summary.is_repeat_buyer then 'returning'\n            else 'new'\n        end as customer_type\n\n    from customers\n\n    left join customer_orders_summary\n        on customers.customer_id = customer_orders_summary.customer_id\n\n)\n\nselect * from joined",
+      "relation_name": "\"jaffle_shop\".\"main\".\"customers\"",
+      "batch_results": null
+    }
+  ],
+  "elapsed_time": 0.44167494773864746,
+  "args": {
+    "favor_state": false,
+    "vars": {},
+    "printer_width": 80,
+    "log_level": "info",
+    "source_freshness_run_project_hooks": true,
+    "defer": false,
+    "require_nested_cumulative_type_params": false,
+    "show_resource_report": false,
+    "warn_error_options": {
+      "error": [],
+      "warn": [],
+      "silence": []
+    },
+    "quiet": false,
+    "state_modified_compare_vars": false,
+    "write_json": true,
+    "introspect": true,
+    "empty": false,
+    "require_yaml_configuration_for_mf_time_spines": false,
+    "print": true,
+    "log_path": "/Users/eka/Desktop/personal/correlator-io/correlator-dbt/tests/fixtures/sample_dbt_project/jaffle_shop/logs",
+    "send_anonymous_usage_stats": true,
+    "strict_mode": false,
+    "use_colors_file": true,
+    "require_explicit_package_overrides_for_builtin_materializations": true,
+    "macro_debugging": false,
+    "profiles_dir": ".",
+    "log_level_file": "debug",
+    "use_colors": true,
+    "cache_selected_only": false,
+    "log_file_max_bytes": 10485760,
+    "require_batched_execution_for_custom_microbatch_strategy": false,
+    "version_check": true,
+    "require_all_warnings_handled_by_warn_error": false,
+    "populate_cache": true,
+    "exclude": [],
+    "upload_to_artifacts_ingest_api": false,
+    "skip_nodes_if_on_run_start_fails": false,
+    "static_parser": true,
+    "which": "run",
+    "partial_parse_file_diff": true,
+    "require_resource_names_without_spaces": true,
+    "indirect_selection": "eager",
+    "log_format": "default",
+    "use_fast_test_edges": false,
+    "require_generic_test_arguments_property": true,
+    "select": [],
+    "validate_macro_args": false,
+    "partial_parse": true,
+    "invocation_command": "dbt run --profiles-dir .",
+    "state_modified_compare_more_unrendered_values": false,
+    "log_format_file": "debug",
+    "project_dir": "/Users/eka/Desktop/personal/correlator-io/correlator-dbt/tests/fixtures/sample_dbt_project/jaffle_shop",
+    "show_all_deprecations": false
+  }
+}

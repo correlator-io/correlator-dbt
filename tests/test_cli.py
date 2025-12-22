@@ -53,13 +53,13 @@ def mock_run_results() -> RunResults:
             TestResult(
                 unique_id="test.my_project.unique_users_id",
                 status="pass",
-                execution_time=1.2,
+                execution_time_seconds=1.2,
                 failures=0,
             ),
             TestResult(
                 unique_id="test.my_project.not_null_users_email",
                 status="fail",
-                execution_time=0.8,
+                execution_time_seconds=0.8,
                 failures=5,
                 message="5 records failed",
             ),

@@ -492,7 +492,9 @@ class TestErrorScenarios:
         # Create target dir with only run_results
         target_dir = tmp_path / "target"
         target_dir.mkdir(parents=True)
-        (target_dir / "run_results.json").symlink_to(fixtures_dir / "run_results.json")
+        (target_dir / "run_results.json").symlink_to(
+            fixtures_dir / "dbt_test_results.json"
+        )
         # Note: manifest.json is NOT created
 
         result = runner.invoke(

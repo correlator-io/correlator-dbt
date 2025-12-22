@@ -38,7 +38,7 @@ from dbt_correlator.parser import (
 
 # Path to test fixtures
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
-RUN_RESULTS_PATH = FIXTURES_DIR / "run_results.json"
+RUN_RESULTS_PATH = FIXTURES_DIR / "dbt_test_results.json"
 MANIFEST_PATH = FIXTURES_DIR / "manifest.json"
 
 
@@ -74,7 +74,7 @@ def minimal_test_data():
                 status="pass",
                 failures=0,
                 message=None,
-                execution_time=0.1,
+                execution_time_seconds=0.1,
             )
         ],
     )
@@ -594,7 +594,7 @@ def test_construct_event_with_custom_namespace_and_job_name() -> None:
                 status="pass",
                 failures=0,
                 message=None,
-                execution_time=0.5,
+                execution_time_seconds=0.5,
             )
         ],
     )

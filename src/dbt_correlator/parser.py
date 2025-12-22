@@ -16,10 +16,13 @@ Implementation follows dbt artifact schema:
 """
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional, cast
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -29,7 +32,7 @@ class TestResult:
     Attributes:
         unique_id: Unique identifier for the test node (e.g., test.my_project.unique_orders_id)
         status: Test execution status (pass, fail, error, skipped)
-        execution_time: Time taken to execute the test in seconds
+        execution_time_seconds: Time taken to execute the test in seconds
         failures: Number of failures (for failed tests)
         message: Error message or additional details
         compiled_code: Compiled SQL for the test
@@ -39,7 +42,7 @@ class TestResult:
 
     unique_id: str
     status: str
-    execution_time: float
+    execution_time_seconds: float
     failures: Optional[int] = None
     message: Optional[str] = None
     compiled_code: Optional[str] = None
@@ -117,6 +120,41 @@ class ModelLineage:
     name: str
     inputs: list[DatasetInfo]
     output: DatasetInfo
+
+
+@dataclass
+class ModelExecutionResult:
+    """Execution result for a single model from dbt run.
+
+    Contains runtime metrics extracted from run_results.json for models
+    executed via `dbt run` or `dbt build`. Used to populate OpenLineage
+    outputStatistics facet with row counts and other metrics.
+
+    Attributes:
+        unique_id: Unique identifier for the model node
+            (e.g., "model.jaffle_shop.customers")
+        status: Execution status ("success", "error", "skipped")
+        execution_time_seconds: Time taken to execute the model in seconds
+        rows_affected: Number of rows written (when adapter provides it).
+            None for adapters like DuckDB that don't return row counts.
+            Available for Postgres, Snowflake, BigQuery, etc.
+        message: Execution message or error details
+
+    Example:
+        >>> result = ModelExecutionResult(
+        ...     unique_id="model.jaffle_shop.customers",
+        ...     status="success",
+        ...     execution_time_seconds=1.5,
+        ...     rows_affected=1500,
+        ...     message="OK",
+        ... )
+    """
+
+    unique_id: str
+    status: str
+    execution_time_seconds: float
+    rows_affected: Optional[int] = None
+    message: Optional[str] = None
 
 
 @dataclass
@@ -262,7 +300,8 @@ def parse_run_results(file_path: str) -> RunResults:
         test_result = TestResult(
             unique_id=result_dict.get("unique_id", ""),
             status=result_dict.get("status", ""),
-            execution_time=result_dict.get("execution_time", 0.0),
+            # Note: dbt JSON uses "execution_time", we normalize to execution_time_seconds
+            execution_time_seconds=result_dict.get("execution_time", 0.0),
             failures=result_dict.get("failures"),
             message=result_dict.get("message"),
             compiled_code=result_dict.get("compiled_code"),
@@ -592,6 +631,10 @@ def extract_model_inputs(
                     dep_node, manifest, namespace_override
                 )
                 inputs.append(dataset_info)
+            else:
+                logger.warning(
+                    "Dependency model not found in manifest: %s", dep_unique_id
+                )
         # Handle source dependencies
         elif dep_unique_id.startswith("source."):
             source_node = manifest.sources.get(dep_unique_id)
@@ -600,6 +643,13 @@ def extract_model_inputs(
                     source_node, manifest, namespace_override
                 )
                 inputs.append(dataset_info)
+            else:
+                logger.warning(
+                    "Dependency source not found in manifest: %s", dep_unique_id
+                )
+        else:
+            # Unknown dependency type (seed, snapshot, etc.)
+            logger.debug("Skipping non-model/source dependency: %s", dep_unique_id)
 
     return inputs
 
@@ -644,6 +694,7 @@ def extract_all_model_lineage(
     for model_id in target_model_ids:
         model_node = manifest.nodes.get(model_id)
         if not model_node:
+            logger.warning("Model node not found in manifest: %s", model_id)
             continue
 
         # Extract model name from node
@@ -717,11 +768,13 @@ def get_models_with_tests(run_results: RunResults, manifest: Manifest) -> set[st
     for result in run_results.results:
         # Skip non-test results
         if not result.unique_id.startswith("test."):
+            logger.debug("Skipping non-test result: %s", result.unique_id)
             continue
 
         # Look up test node in manifest
         test_node = manifest.nodes.get(result.unique_id)
         if not test_node:
+            logger.warning("Test node not found in manifest: %s", result.unique_id)
             continue
 
         # Extract project name and model name from test
@@ -730,8 +783,13 @@ def get_models_with_tests(run_results: RunResults, manifest: Manifest) -> set[st
             model_name = _extract_model_name(test_node, result.unique_id)
             model_unique_id = f"model.{project_name}.{model_name}"
             models.add(model_unique_id)
-        except ValueError:
+        except ValueError as e:
             # Skip tests that don't have valid model refs
+            logger.warning(
+                "Skipping test without valid model ref: %s - %s",
+                result.unique_id,
+                e,
+            )
             continue
 
     return models
@@ -762,3 +820,53 @@ def map_test_status(dbt_status: str) -> bool:
         False
     """
     return dbt_status.lower() == "pass"
+
+
+def parse_model_results(run_results: RunResults) -> dict[str, ModelExecutionResult]:
+    """Parse model execution results from run_results.
+
+    Extracts model execution metrics from run_results.json for models
+    executed via `dbt run` or `dbt build`. Filters out non-model results
+    (tests, seeds, snapshots) and returns only model execution data.
+
+    Args:
+        run_results: Parsed RunResults from dbt run/build.
+
+    Returns:
+        Dictionary mapping model unique_id to ModelExecutionResult.
+        Empty dictionary if no models were executed.
+
+    Example:
+        >>> rr = parse_run_results("target/run_results.json")
+        >>> model_results = parse_model_results(rr)
+        >>> result = model_results["model.jaffle_shop.customers"]
+        >>> print(f"Execution time: {result.execution_time_seconds}s")
+        >>> print(f"Rows affected: {result.rows_affected}")
+
+    Note:
+        - rows_affected may be None for adapters that don't return it (e.g., DuckDB)
+        - Available for Postgres, Snowflake, BigQuery, etc.
+    """
+    model_results: dict[str, ModelExecutionResult] = {}
+
+    for result in run_results.results:
+        # Skip non-model results (tests, seeds, snapshots, etc.)
+        if not result.unique_id.startswith("model."):
+            logger.debug("Skipping non-model result: %s", result.unique_id)
+            continue
+
+        # Extract rows_affected from adapter_response if available
+        rows_affected: Optional[int] = None
+        if result.adapter_response:
+            rows_affected = result.adapter_response.get("rows_affected")
+
+        model_result = ModelExecutionResult(
+            unique_id=result.unique_id,
+            status=result.status,
+            execution_time_seconds=result.execution_time_seconds,
+            rows_affected=rows_affected,
+            message=result.message,
+        )
+        model_results[result.unique_id] = model_result
+
+    return model_results
