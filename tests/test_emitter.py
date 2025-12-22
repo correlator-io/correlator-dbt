@@ -23,12 +23,17 @@ from openlineage.client.event_v2 import RunState
 
 from dbt_correlator.emitter import (
     construct_events,
+    construct_lineage_event,
+    construct_lineage_events,
     create_wrapping_event,
     emit_events,
     group_tests_by_dataset,
 )
 from dbt_correlator.parser import (
+    DatasetInfo,
     Manifest,
+    ModelExecutionResult,
+    ModelLineage,
     RunResults,
     RunResultsMetadata,
     TestResult,
@@ -1039,3 +1044,565 @@ def test_emit_event_integration_with_correlator() -> None:
 
     # This test will be implemented when we want to test with real Correlator
     # For now, we skip to avoid test failures in CI/CD
+
+
+# ============================================================================
+# Tests for construct_lineage_event()
+# ============================================================================
+
+
+@pytest.fixture
+def sample_model_lineage():
+    """Create sample ModelLineage for testing lineage event construction."""
+    return ModelLineage(
+        unique_id="model.jaffle_shop.customers",
+        name="customers",
+        inputs=[
+            DatasetInfo(namespace="duckdb://jaffle_shop", name="main.stg_customers"),
+            DatasetInfo(namespace="duckdb://jaffle_shop", name="main.stg_orders"),
+        ],
+        output=DatasetInfo(namespace="duckdb://jaffle_shop", name="main.customers"),
+    )
+
+
+@pytest.fixture
+def sample_model_execution_result():
+    """Create sample ModelExecutionResult for testing runtime metrics."""
+    return ModelExecutionResult(
+        unique_id="model.jaffle_shop.customers",
+        status="success",
+        execution_time_seconds=1.5,
+        rows_affected=1500,
+        message="OK",
+    )
+
+
+@pytest.mark.unit
+def test_construct_lineage_event_creates_complete_event(sample_model_lineage) -> None:
+    """Test that construct_lineage_event creates valid OpenLineage COMPLETE event.
+
+    Validates that:
+        - eventType is COMPLETE
+        - run.runId matches provided run_id
+        - job namespace and name are set correctly
+        - producer is set to dbt-correlator
+        - Event structure is valid OpenLineage RunEvent
+    """
+    run_id = "550e8400-e29b-41d4-a716-446655440000"
+    event_time = "2024-01-01T12:00:00Z"
+
+    event = construct_lineage_event(
+        model_lineage=sample_model_lineage,
+        run_id=run_id,
+        job_namespace="dbt",
+        producer="https://github.com/correlator-io/dbt-correlator/0.1.0",
+        event_time=event_time,
+    )
+
+    # Verify event structure
+    assert event.eventType == RunState.COMPLETE
+    assert event.run.runId == run_id
+    assert event.job.namespace == "dbt"
+    assert event.job.name == "model.jaffle_shop.customers"
+    assert event.eventTime == event_time
+    assert "correlator-io/dbt-correlator" in event.producer
+
+
+@pytest.mark.unit
+def test_construct_lineage_event_includes_inputs(sample_model_lineage) -> None:
+    """Test that lineage event includes input datasets from ModelLineage.
+
+    Validates that:
+        - inputs array is populated from ModelLineage.inputs
+        - Each input has correct namespace and name
+        - Input count matches ModelLineage.inputs count
+    """
+    event = construct_lineage_event(
+        model_lineage=sample_model_lineage,
+        run_id="550e8400-e29b-41d4-a716-446655440001",
+        job_namespace="dbt",
+        producer="https://test/producer",
+        event_time="2024-01-01T12:00:00Z",
+    )
+
+    # Verify inputs
+    assert len(event.inputs) == 2
+    assert event.inputs[0].namespace == "duckdb://jaffle_shop"
+    assert event.inputs[0].name == "main.stg_customers"
+    assert event.inputs[1].namespace == "duckdb://jaffle_shop"
+    assert event.inputs[1].name == "main.stg_orders"
+
+
+@pytest.mark.unit
+def test_construct_lineage_event_includes_output(sample_model_lineage) -> None:
+    """Test that lineage event includes output dataset from ModelLineage.
+
+    Validates that:
+        - outputs array has single entry (the model output)
+        - Output has correct namespace and name from ModelLineage.output
+    """
+    event = construct_lineage_event(
+        model_lineage=sample_model_lineage,
+        run_id="550e8400-e29b-41d4-a716-446655440002",
+        job_namespace="dbt",
+        producer="https://test/producer",
+        event_time="2024-01-01T12:00:00Z",
+    )
+
+    # Verify outputs
+    assert len(event.outputs) == 1
+    assert event.outputs[0].namespace == "duckdb://jaffle_shop"
+    assert event.outputs[0].name == "main.customers"
+
+
+@pytest.mark.unit
+def test_construct_lineage_event_includes_runtime_metrics(
+    sample_model_lineage, sample_model_execution_result
+) -> None:
+    """Test that lineage event includes outputStatistics facet with row count.
+
+    Validates that:
+        - Output dataset has outputFacets with outputStatistics
+        - outputStatistics contains rowCount from ModelExecutionResult
+        - Facet structure follows OpenLineage spec
+
+    Reference:
+        https://openlineage.io/docs/spec/facets/dataset-facets/output-statistics
+    """
+    event = construct_lineage_event(
+        model_lineage=sample_model_lineage,
+        run_id="550e8400-e29b-41d4-a716-446655440002",
+        job_namespace="dbt",
+        producer="https://test/producer",
+        event_time="2024-01-01T12:00:00Z",
+        execution_result=sample_model_execution_result,
+    )
+
+    # Verify output has outputStatistics facet
+    output = event.outputs[0]
+    assert output.outputFacets is not None
+    assert "outputStatistics" in output.outputFacets
+
+    # Verify facet structure
+    stats_facet = output.outputFacets["outputStatistics"]
+    assert stats_facet.rowCount == 1500
+
+
+@pytest.mark.unit
+def test_construct_lineage_event_without_runtime_metrics(sample_model_lineage) -> None:
+    """Test that lineage event works without runtime metrics.
+
+    Validates that:
+        - Event is valid without execution_result parameter
+        - Output dataset has no outputStatistics facet
+        - Used for `dbt test` command (no model execution metrics)
+    """
+    event = construct_lineage_event(
+        model_lineage=sample_model_lineage,
+        run_id="550e8400-e29b-41d4-a716-446655440002",
+        job_namespace="dbt",
+        producer="https://test/producer",
+        event_time="2024-01-01T12:00:00Z",
+        # No execution_result provided
+    )
+
+    # Verify output exists but has no outputStatistics
+    output = event.outputs[0]
+    # outputFacets should be None or empty when no metrics provided
+    assert output.outputFacets is None or "outputStatistics" not in (
+        output.outputFacets or {}
+    )
+
+
+@pytest.mark.unit
+def test_construct_lineage_event_with_no_inputs() -> None:
+    """Test that lineage event handles models with no inputs.
+
+    Validates that:
+        - Event is valid when ModelLineage has empty inputs list
+        - outputs still populated correctly
+        - No errors raised
+    """
+    # Model with no dependencies (e.g., seed-based or hardcoded)
+    lineage_no_inputs = ModelLineage(
+        unique_id="model.jaffle_shop.seed_based_model",
+        name="seed_based_model",
+        inputs=[],  # No upstream dependencies
+        output=DatasetInfo(namespace="duckdb://db", name="main.seed_based_model"),
+    )
+
+    event = construct_lineage_event(
+        model_lineage=lineage_no_inputs,
+        run_id="550e8400-e29b-41d4-a716-446655440002",
+        job_namespace="dbt",
+        producer="https://test/producer",
+        event_time="2024-01-01T12:00:00Z",
+    )
+
+    # Verify event structure
+    assert len(event.inputs) == 0
+    assert len(event.outputs) == 1
+    assert event.outputs[0].name == "main.seed_based_model"
+
+
+@pytest.mark.unit
+def test_construct_lineage_event_serializes_to_json(
+    sample_model_lineage, sample_model_execution_result
+) -> None:
+    """Test that lineage event can be serialized to JSON for HTTP transmission.
+
+    Validates that:
+        - Event with OutputDataset serializes correctly
+        - outputStatistics facet serializes correctly
+        - JSON is valid and parseable
+        - All required OpenLineage fields present
+
+    This is critical because OutputDataset/outputFacets have different
+    serialization than InputDataset/inputFacets used in test events.
+    """
+    event = construct_lineage_event(
+        model_lineage=sample_model_lineage,
+        run_id="550e8400-e29b-41d4-a716-446655440005",
+        job_namespace="dbt",
+        producer="https://github.com/correlator-io/dbt-correlator/0.1.0",
+        event_time="2024-01-01T12:00:00Z",
+        execution_result=sample_model_execution_result,
+    )
+
+    # Serialize to dict (same as emit_events does)
+    event_dict = attr.asdict(event)
+
+    # Serialize to JSON string
+    json_str = json.dumps(event_dict, default=str)
+
+    # Verify JSON is valid and parseable
+    parsed = json.loads(json_str)
+
+    # Verify required OpenLineage fields
+    assert "eventType" in parsed
+    assert "run" in parsed
+    assert "job" in parsed
+    assert "inputs" in parsed
+    assert "outputs" in parsed
+    assert "producer" in parsed
+
+    # Verify output structure (different from input)
+    assert len(parsed["outputs"]) == 1
+    output = parsed["outputs"][0]
+    assert "namespace" in output
+    assert "name" in output
+    assert "outputFacets" in output
+
+    # Verify outputStatistics facet serialized correctly
+    assert "outputStatistics" in output["outputFacets"]
+    stats = output["outputFacets"]["outputStatistics"]
+    assert stats["rowCount"] == 1500
+
+
+# ============================================================================
+# Tests for construct_lineage_events()
+# ============================================================================
+
+
+@pytest.fixture
+def sample_model_lineages():
+    """Create list of sample ModelLineage objects for batch testing."""
+    return [
+        ModelLineage(
+            unique_id="model.jaffle_shop.stg_customers",
+            name="stg_customers",
+            inputs=[
+                DatasetInfo(
+                    namespace="duckdb://jaffle_shop", name="main.raw_customers"
+                ),
+            ],
+            output=DatasetInfo(
+                namespace="duckdb://jaffle_shop", name="main.stg_customers"
+            ),
+        ),
+        ModelLineage(
+            unique_id="model.jaffle_shop.customers",
+            name="customers",
+            inputs=[
+                DatasetInfo(
+                    namespace="duckdb://jaffle_shop", name="main.stg_customers"
+                ),
+            ],
+            output=DatasetInfo(namespace="duckdb://jaffle_shop", name="main.customers"),
+        ),
+    ]
+
+
+@pytest.mark.unit
+def test_construct_lineage_events_creates_event_per_model(
+    sample_model_lineages,
+) -> None:
+    """Test that construct_lineage_events creates one event per model.
+
+    Validates that:
+        - Returns list of RunEvents
+        - Event count matches input model count
+        - Each event corresponds to a model from input list
+    """
+    events = construct_lineage_events(
+        model_lineages=sample_model_lineages,
+        run_id="550e8400-e29b-41d4-a716-446655440003",
+        job_namespace="dbt",
+        producer="https://test/producer",
+        event_time="2024-01-01T12:00:00Z",
+    )
+
+    # Verify event count
+    assert len(events) == 2
+
+    # Verify each event corresponds to a model
+    job_names = {event.job.name for event in events}
+    assert "model.jaffle_shop.stg_customers" in job_names
+    assert "model.jaffle_shop.customers" in job_names
+
+
+@pytest.mark.unit
+def test_construct_lineage_events_all_share_same_run_id(sample_model_lineages) -> None:
+    """Test that all lineage events share the same run_id.
+
+    Validates that:
+        - All events have identical run.runId
+        - Critical for correlation in Correlator
+    """
+    run_id = "550e8400-e29b-41d4-a716-446655440004"
+
+    events = construct_lineage_events(
+        model_lineages=sample_model_lineages,
+        run_id=run_id,
+        job_namespace="dbt",
+        producer="https://test/producer",
+        event_time="2024-01-01T12:00:00Z",
+    )
+
+    # All events should share the same runId
+    for event in events:
+        assert event.run.runId == run_id
+
+
+@pytest.mark.unit
+def test_construct_lineage_events_with_execution_results(
+    sample_model_lineages,
+) -> None:
+    """Test that execution results are matched to correct models.
+
+    Validates that:
+        - Execution results are correctly matched by unique_id
+        - Models with results get outputStatistics facet
+        - Models without results don't get facet
+    """
+    # Only provide execution result for one model
+    execution_results = {
+        "model.jaffle_shop.customers": ModelExecutionResult(
+            unique_id="model.jaffle_shop.customers",
+            status="success",
+            execution_time_seconds=2.5,
+            rows_affected=2500,
+            message="OK",
+        )
+    }
+
+    events = construct_lineage_events(
+        model_lineages=sample_model_lineages,
+        run_id="550e8400-e29b-41d4-a716-446655440002",
+        job_namespace="dbt",
+        producer="https://test/producer",
+        event_time="2024-01-01T12:00:00Z",
+        execution_results=execution_results,
+    )
+
+    # Find the customers event (should have metrics)
+    customers_event = next(
+        e for e in events if e.job.name == "model.jaffle_shop.customers"
+    )
+    stg_customers_event = next(
+        e for e in events if e.job.name == "model.jaffle_shop.stg_customers"
+    )
+
+    # customers should have outputStatistics
+    assert customers_event.outputs[0].outputFacets is not None
+    assert "outputStatistics" in customers_event.outputs[0].outputFacets
+    assert customers_event.outputs[0].outputFacets["outputStatistics"].rowCount == 2500
+
+    # stg_customers should NOT have outputStatistics
+    assert stg_customers_event.outputs[0].outputFacets is None or (
+        "outputStatistics" not in (stg_customers_event.outputs[0].outputFacets or {})
+    )
+
+
+@pytest.mark.unit
+def test_construct_lineage_events_empty_list() -> None:
+    """Test that empty model list returns empty event list.
+
+    Validates that:
+        - Empty input returns empty output
+        - No errors raised
+        - Handles gracefully
+    """
+    events = construct_lineage_events(
+        model_lineages=[],
+        run_id="550e8400-e29b-41d4-a716-446655440002",
+        job_namespace="dbt",
+        producer="https://test/producer",
+        event_time="2024-01-01T12:00:00Z",
+    )
+
+    assert events == []
+
+
+# ============================================================================
+# Tests for emit_events() OpenLineage Consumer Compatibility
+# ============================================================================
+
+
+@pytest.mark.unit
+def test_emit_events_handles_204_no_content(minimal_test_data) -> None:
+    """Test handling of 204 No Content response from OL consumer.
+
+    Validates that:
+        - 204 response is treated as success
+        - No exceptions raised
+        - Compatible with generic OpenLineage consumers
+
+    Note:
+        Some OpenLineage consumers return 204 with no body as acknowledgment.
+    """
+    run_results, manifest = minimal_test_data
+
+    events = construct_events(
+        run_results, manifest, "dbt", "test_job", "eb31681b-641b-4f73-bf93-cc339decae23"
+    )
+
+    with patch("requests.post") as mock_post:
+        mock_response = MagicMock()
+        mock_response.status_code = 204
+        mock_response.text = ""  # No content
+        mock_post.return_value = mock_response
+
+        # Should succeed without exception
+        emit_events(events, "http://localhost:5000/api/v1/lineage")
+
+        assert mock_post.called
+
+
+@pytest.mark.unit
+def test_emit_events_handles_200_with_body(minimal_test_data) -> None:
+    """Test handling of 200 response with body from OL consumer.
+
+    Validates that:
+        - 200 with JSON body is handled correctly
+        - Summary is logged if present
+        - Compatible with OpenLineage consumers that return summary
+    """
+    run_results, manifest = minimal_test_data
+
+    events = construct_events(
+        run_results, manifest, "dbt", "test_job", "eb31681b-641b-4f73-bf93-cc339decae23"
+    )
+
+    with patch("requests.post") as mock_post:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = '{"summary": {"successful": 1, "failed": 0}}'
+        mock_response.json.return_value = {"summary": {"successful": 1, "failed": 0}}
+        mock_post.return_value = mock_response
+
+        # Should succeed without exception
+        emit_events(events, "http://localhost:5000/api/v1/lineage")
+
+        assert mock_post.called
+
+
+@pytest.mark.unit
+def test_emit_events_handles_200_without_body(minimal_test_data) -> None:
+    """Test handling of 200 response without body from Correlator.
+
+    Validates that:
+        - 200 with empty body is treated as success
+        - Compatible with Correlator backend
+        - No JSON parsing errors
+    """
+    run_results, manifest = minimal_test_data
+
+    events = construct_events(
+        run_results, manifest, "dbt", "test_job", "eb31681b-641b-4f73-bf93-cc339decae23"
+    )
+
+    with patch("requests.post") as mock_post:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = ""  # Empty body
+        mock_post.return_value = mock_response
+
+        # Should succeed without exception
+        emit_events(events, "http://localhost:8080/api/v1/lineage/events")
+
+        assert mock_post.called
+
+
+@pytest.mark.unit
+def test_emit_events_with_lineage_events(sample_model_lineage) -> None:
+    """Test that lineage events serialize and emit correctly via HTTP.
+
+    Validates that:
+        - Lineage events (with OutputDataset) emit correctly
+        - outputFacets serialize properly (different from inputFacets)
+        - Request body contains valid JSON array
+        - No serialization errors during emission
+
+    This test ensures the full path from construct_lineage_event()
+    through emit_events() works correctly.
+    """
+    # Create lineage event with runtime metrics
+    execution_result = ModelExecutionResult(
+        unique_id="model.jaffle_shop.customers",
+        status="success",
+        execution_time_seconds=2.0,
+        rows_affected=1000,
+        message="OK",
+    )
+
+    event = construct_lineage_event(
+        model_lineage=sample_model_lineage,
+        run_id="550e8400-e29b-41d4-a716-446655440006",
+        job_namespace="dbt",
+        producer="https://github.com/correlator-io/dbt-correlator/0.1.0",
+        event_time="2024-01-01T12:00:00Z",
+        execution_result=execution_result,
+    )
+
+    with patch("requests.post") as mock_post:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = '{"summary": {"successful": 1, "failed": 0}}'
+        mock_response.json.return_value = {"summary": {"successful": 1, "failed": 0}}
+        mock_post.return_value = mock_response
+
+        # Emit lineage event
+        emit_events([event], "http://localhost:8080/api/v1/lineage/events")
+
+        # Verify request was made
+        assert mock_post.called
+
+        # Verify JSON body structure
+        call_args = mock_post.call_args
+        json_data = call_args[1].get("json")
+
+        assert isinstance(json_data, list)
+        assert len(json_data) == 1
+
+        # Verify lineage event structure in request body
+        event_data = json_data[0]
+        assert event_data["eventType"] == "COMPLETE"
+        assert len(event_data["outputs"]) == 1
+        assert event_data["outputs"][0]["namespace"] == "duckdb://jaffle_shop"
+        assert event_data["outputs"][0]["name"] == "main.customers"
+
+        # Verify outputStatistics facet was serialized
+        output_facets = event_data["outputs"][0].get("outputFacets", {})
+        assert "outputStatistics" in output_facets
+        assert output_facets["outputStatistics"]["rowCount"] == 1000
