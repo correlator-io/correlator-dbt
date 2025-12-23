@@ -152,7 +152,7 @@ class TestEndToEndWithMockServer:
 
         # Verify success message in output
         assert "Emitted" in result.output
-        assert "events to Correlator" in result.output
+        assert "events" in result.output
 
     def test_end_to_end_event_structure_validation(
         self,

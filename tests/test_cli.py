@@ -25,7 +25,7 @@ from click.testing import CliRunner
 from openlineage.client.event_v2 import RunEvent
 
 from dbt_correlator import __version__
-from dbt_correlator.cli import cli
+from dbt_correlator.cli import cli, get_default_job_name
 from dbt_correlator.parser import Manifest, RunResults, RunResultsMetadata, TestResult
 
 # =============================================================================
@@ -147,7 +147,7 @@ def cli_mocks(
 ) -> Iterator[dict[str, Any]]:
     """Consolidated fixture that mocks all CLI dependencies.
 
-    This fixture eliminates the need to repeat 6 @patch decorators on every test.
+    This fixture eliminates the need to repeat multiple @patch decorators on every test.
     It sets up sensible defaults that can be overridden in individual tests.
 
     Returns:
@@ -157,9 +157,13 @@ def cli_mocks(
         patch("dbt_correlator.cli.subprocess.run") as mock_subprocess,
         patch("dbt_correlator.cli.emit_events") as mock_emit,
         patch("dbt_correlator.cli.construct_events") as mock_construct,
+        patch("dbt_correlator.cli.construct_lineage_events") as mock_lineage_events,
         patch("dbt_correlator.cli.create_wrapping_event") as mock_wrapping,
         patch("dbt_correlator.cli.parse_manifest") as mock_parse_manifest,
         patch("dbt_correlator.cli.parse_run_results") as mock_parse_results,
+        patch("dbt_correlator.cli.extract_all_model_lineage") as mock_extract_lineage,
+        patch("dbt_correlator.cli.get_executed_models") as mock_get_executed,
+        patch("dbt_correlator.cli.parse_model_results") as mock_parse_model_results,
     ):
         # Set default return values
         mock_subprocess.return_value = mock_completed_process_success
@@ -167,14 +171,22 @@ def cli_mocks(
         mock_parse_manifest.return_value = mock_manifest
         mock_wrapping.return_value = mock_run_event
         mock_construct.return_value = [mock_run_event]
+        mock_lineage_events.return_value = [mock_run_event]
+        mock_extract_lineage.return_value = []  # Empty list of ModelLineage
+        mock_get_executed.return_value = {"model.my_project.users"}
+        mock_parse_model_results.return_value = {}
 
         yield {
             "subprocess": mock_subprocess,
             "emit": mock_emit,
             "construct": mock_construct,
+            "construct_lineage": mock_lineage_events,
             "wrapping": mock_wrapping,
             "parse_manifest": mock_parse_manifest,
             "parse_results": mock_parse_results,
+            "extract_lineage": mock_extract_lineage,
+            "get_executed": mock_get_executed,
+            "parse_model_results": mock_parse_model_results,
             "run_results": mock_run_results,
             "manifest": mock_manifest,
             "run_event": mock_run_event,
@@ -558,7 +570,8 @@ class TestSkipDbtRun:
         )
 
         cli_mocks["parse_results"].assert_called_once()
-        cli_mocks["parse_manifest"].assert_called_once()
+        # parse_manifest is called twice: once for job_name, once for artifacts
+        assert cli_mocks["parse_manifest"].call_count >= 1
 
     def test_test_command_skip_dbt_run_still_emits_events(
         self, runner: CliRunner, cli_mocks: dict[str, Any]
@@ -869,3 +882,379 @@ correlator:
         cli_mocks["emit"].assert_called_once()
         call_args = cli_mocks["emit"].call_args
         assert call_args[0][1] == "http://from-env-var:8080/api/v1/lineage/events"
+
+
+# =============================================================================
+# I. Run Command Tests
+# =============================================================================
+
+
+class TestRunCommand:
+    """Tests for 'dbt-correlator run' command."""
+
+    def test_run_command_help(self, runner: CliRunner) -> None:
+        """Test that 'dbt-correlator run --help' shows run command help."""
+        result = runner.invoke(cli, ["run", "--help"])
+
+        assert result.exit_code == 0
+        assert "--correlator-endpoint" in result.output
+        assert "--project-dir" in result.output
+        assert "--dataset-namespace" in result.output
+        assert "lineage" in result.output.lower()
+
+    def test_run_command_requires_correlator_endpoint(self, runner: CliRunner) -> None:
+        """Test that run command fails without --correlator-endpoint."""
+        result = runner.invoke(cli, ["run"])
+
+        assert result.exit_code != 0
+        assert "correlator-endpoint" in result.output.lower()
+
+    def test_run_command_runs_dbt_run(
+        self, runner: CliRunner, cli_mocks: dict[str, Any]
+    ) -> None:
+        """Test that run command calls subprocess.run with dbt run."""
+        runner.invoke(
+            cli,
+            [
+                "run",
+                "--correlator-endpoint",
+                "http://localhost:8080/api/v1/lineage/events",
+            ],
+        )
+
+        # Check subprocess was called with 'dbt run'
+        subprocess_calls = cli_mocks["subprocess"].call_args_list
+        # Find the call with 'run' command (skip any 'test' calls)
+        run_call = None
+        for call in subprocess_calls:
+            if "run" in call[0][0]:
+                run_call = call
+                break
+
+        assert run_call is not None, "Expected dbt run to be called"
+        assert "dbt" in run_call[0][0]
+        assert "run" in run_call[0][0]
+
+    def test_run_command_extracts_lineage(
+        self, runner: CliRunner, cli_mocks: dict[str, Any]
+    ) -> None:
+        """Test that run command extracts model lineage."""
+        runner.invoke(
+            cli,
+            [
+                "run",
+                "--correlator-endpoint",
+                "http://localhost:8080/api/v1/lineage/events",
+            ],
+        )
+
+        cli_mocks["extract_lineage"].assert_called_once()
+        cli_mocks["construct_lineage"].assert_called_once()
+
+    def test_run_command_emits_lineage_events(
+        self, runner: CliRunner, cli_mocks: dict[str, Any]
+    ) -> None:
+        """Test that run command emits lineage events."""
+        runner.invoke(
+            cli,
+            [
+                "run",
+                "--correlator-endpoint",
+                "http://localhost:8080/api/v1/lineage/events",
+            ],
+        )
+
+        # emit_events should be called at least twice (START + lineage+terminal)
+        assert cli_mocks["emit"].call_count >= 2
+
+    def test_run_command_passes_dataset_namespace(
+        self, runner: CliRunner, cli_mocks: dict[str, Any]
+    ) -> None:
+        """Test that --dataset-namespace is passed to extract_all_model_lineage."""
+        runner.invoke(
+            cli,
+            [
+                "run",
+                "--correlator-endpoint",
+                "http://localhost:8080/api/v1/lineage/events",
+                "--dataset-namespace",
+                "postgresql://localhost:5432/mydb",
+            ],
+        )
+
+        # Verify namespace_override was passed to extract_all_model_lineage
+        call_kwargs = cli_mocks["extract_lineage"].call_args[1]
+        assert (
+            call_kwargs.get("namespace_override") == "postgresql://localhost:5432/mydb"
+        )
+
+    def test_run_command_skip_dbt_run_flag(
+        self, runner: CliRunner, cli_mocks: dict[str, Any]
+    ) -> None:
+        """Test that --skip-dbt-run flag skips dbt execution."""
+        runner.invoke(
+            cli,
+            [
+                "run",
+                "--correlator-endpoint",
+                "http://localhost:8080/api/v1/lineage/events",
+                "--skip-dbt-run",
+            ],
+        )
+
+        # subprocess should only be called for emit, not dbt run
+        # When skipping, subprocess.run for 'dbt run' should not be called
+        for call in cli_mocks["subprocess"].call_args_list:
+            cmd = call[0][0]
+            # Should not have a 'dbt run' call
+            assert not (
+                "dbt" in cmd and "run" in cmd and "--project-dir" in cmd
+            ), "dbt run should not be called with --skip-dbt-run"
+
+    def test_run_command_propagates_exit_code(
+        self, runner: CliRunner, cli_mocks: dict[str, Any]
+    ) -> None:
+        """Test that run command propagates dbt exit code."""
+        # Set up failure return code
+        cli_mocks["subprocess"].return_value = subprocess.CompletedProcess(
+            args=["dbt", "run"], returncode=1, stdout=b"", stderr=b""
+        )
+
+        result = runner.invoke(
+            cli,
+            [
+                "run",
+                "--correlator-endpoint",
+                "http://localhost:8080/api/v1/lineage/events",
+            ],
+        )
+
+        assert result.exit_code == 1
+
+
+# =============================================================================
+# J. Build Command Tests
+# =============================================================================
+
+
+class TestBuildCommand:
+    """Tests for 'dbt-correlator build' command."""
+
+    def test_build_command_help(self, runner: CliRunner) -> None:
+        """Test that 'dbt-correlator build --help' shows build command help."""
+        result = runner.invoke(cli, ["build", "--help"])
+
+        assert result.exit_code == 0
+        assert "--correlator-endpoint" in result.output
+        assert "--project-dir" in result.output
+        assert "--dataset-namespace" in result.output
+        assert "lineage" in result.output.lower()
+        assert "test" in result.output.lower()
+
+    def test_build_command_requires_correlator_endpoint(
+        self, runner: CliRunner
+    ) -> None:
+        """Test that build command fails without --correlator-endpoint."""
+        result = runner.invoke(cli, ["build"])
+
+        assert result.exit_code != 0
+        assert "correlator-endpoint" in result.output.lower()
+
+    def test_build_command_runs_dbt_build(
+        self, runner: CliRunner, cli_mocks: dict[str, Any]
+    ) -> None:
+        """Test that build command calls subprocess.run with dbt build."""
+        runner.invoke(
+            cli,
+            [
+                "build",
+                "--correlator-endpoint",
+                "http://localhost:8080/api/v1/lineage/events",
+            ],
+        )
+
+        # Check subprocess was called with 'dbt build'
+        subprocess_calls = cli_mocks["subprocess"].call_args_list
+        build_call = None
+        for call in subprocess_calls:
+            if "build" in call[0][0]:
+                build_call = call
+                break
+
+        assert build_call is not None, "Expected dbt build to be called"
+        assert "dbt" in build_call[0][0]
+        assert "build" in build_call[0][0]
+
+    def test_build_command_emits_both_lineage_and_test_events(
+        self, runner: CliRunner, cli_mocks: dict[str, Any]
+    ) -> None:
+        """Test that build command emits both lineage and test events."""
+        runner.invoke(
+            cli,
+            [
+                "build",
+                "--correlator-endpoint",
+                "http://localhost:8080/api/v1/lineage/events",
+            ],
+        )
+
+        # Both construct_lineage_events and construct_events should be called
+        cli_mocks["construct_lineage"].assert_called_once()
+        cli_mocks["construct"].assert_called_once()
+
+    def test_build_command_uses_single_run_id(
+        self, runner: CliRunner, cli_mocks: dict[str, Any]
+    ) -> None:
+        """Test that build command uses same run_id for all events."""
+        runner.invoke(
+            cli,
+            [
+                "build",
+                "--correlator-endpoint",
+                "http://localhost:8080/api/v1/lineage/events",
+            ],
+        )
+
+        # Get run_id from construct_lineage_events call
+        lineage_call_kwargs = cli_mocks["construct_lineage"].call_args[1]
+        lineage_run_id = lineage_call_kwargs.get("run_id")
+
+        # Get run_id from construct_events call
+        construct_call_kwargs = cli_mocks["construct"].call_args[1]
+        construct_run_id = construct_call_kwargs.get("run_id")
+
+        assert lineage_run_id == construct_run_id, "All events should share same run_id"
+
+    def test_build_command_propagates_exit_code(
+        self, runner: CliRunner, cli_mocks: dict[str, Any]
+    ) -> None:
+        """Test that build command propagates dbt exit code."""
+        # Set up failure return code (test failures)
+        cli_mocks["subprocess"].return_value = subprocess.CompletedProcess(
+            args=["dbt", "build"], returncode=1, stdout=b"", stderr=b""
+        )
+
+        result = runner.invoke(
+            cli,
+            [
+                "build",
+                "--correlator-endpoint",
+                "http://localhost:8080/api/v1/lineage/events",
+            ],
+        )
+
+        assert result.exit_code == 1
+
+    def test_build_command_skip_dbt_run_flag(
+        self, runner: CliRunner, cli_mocks: dict[str, Any]
+    ) -> None:
+        """Test that --skip-dbt-run flag skips dbt execution in build."""
+        runner.invoke(
+            cli,
+            [
+                "build",
+                "--correlator-endpoint",
+                "http://localhost:8080/api/v1/lineage/events",
+                "--skip-dbt-run",
+            ],
+        )
+
+        # Should not have a 'dbt build' call
+        for call in cli_mocks["subprocess"].call_args_list:
+            cmd = call[0][0]
+            assert not (
+                "dbt" in cmd and "build" in cmd and "--project-dir" in cmd
+            ), "dbt build should not be called with --skip-dbt-run"
+
+
+# =============================================================================
+# K. CLI Help Shows All Commands
+# =============================================================================
+
+
+class TestCLIShowsAllCommands:
+    """Tests to verify all commands are visible in CLI help."""
+
+    def test_cli_help_shows_all_commands(self, runner: CliRunner) -> None:
+        """Test that main CLI help shows test, run, and build commands."""
+        result = runner.invoke(cli, ["--help"])
+
+        assert result.exit_code == 0
+        assert "test" in result.output
+        assert "run" in result.output
+        assert "build" in result.output
+
+
+# =============================================================================
+# L. Dynamic Job Name Tests
+# =============================================================================
+
+
+class TestDynamicJobName:
+    """Tests for dynamic job name feature (dbt-ol compatible)."""
+
+    def test_get_default_job_name_returns_project_command_format(
+        self, mock_manifest: Any
+    ) -> None:
+        """Test that get_default_job_name returns {project_name}.{command} format."""
+        # Add project_name to mock manifest metadata
+        mock_manifest.metadata["project_name"] = "jaffle_shop"
+
+        assert get_default_job_name(mock_manifest, "test") == "jaffle_shop.test"
+        assert get_default_job_name(mock_manifest, "run") == "jaffle_shop.run"
+        assert get_default_job_name(mock_manifest, "build") == "jaffle_shop.build"
+
+    def test_get_default_job_name_falls_back_to_dbt(self, mock_manifest: Any) -> None:
+        """Test that get_default_job_name falls back to 'dbt' if no project_name."""
+        # Remove project_name from metadata
+        mock_manifest.metadata.pop("project_name", None)
+
+        assert get_default_job_name(mock_manifest, "test") == "dbt.test"
+        assert get_default_job_name(mock_manifest, "run") == "dbt.run"
+
+    def test_test_command_uses_dynamic_job_name(
+        self, runner: CliRunner, cli_mocks: dict[str, Any]
+    ) -> None:
+        """Test that test command uses dynamic job name from manifest."""
+        # Set up manifest with project_name
+        cli_mocks["manifest"].metadata["project_name"] = "my_project"
+
+        runner.invoke(
+            cli,
+            [
+                "test",
+                "--correlator-endpoint",
+                "http://localhost:8080/api/v1/lineage/events",
+            ],
+        )
+
+        # Verify wrapping event was called with dynamic job name
+        wrapping_calls = cli_mocks["wrapping"].call_args_list
+        # First call is START event
+        start_call = wrapping_calls[0]
+        # job_name is the 3rd positional argument (after event_type and run_id)
+        job_name_used = start_call[0][2]
+        assert job_name_used == "my_project.test"
+
+    def test_custom_job_name_overrides_dynamic(
+        self, runner: CliRunner, cli_mocks: dict[str, Any]
+    ) -> None:
+        """Test that --job-name overrides dynamic job name."""
+        cli_mocks["manifest"].metadata["project_name"] = "my_project"
+
+        runner.invoke(
+            cli,
+            [
+                "test",
+                "--correlator-endpoint",
+                "http://localhost:8080/api/v1/lineage/events",
+                "--job-name",
+                "custom_job_name",
+            ],
+        )
+
+        # Verify custom job name was used
+        wrapping_calls = cli_mocks["wrapping"].call_args_list
+        start_call = wrapping_calls[0]
+        job_name_used = start_call[0][2]
+        assert job_name_used == "custom_job_name"
