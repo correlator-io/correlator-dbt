@@ -7,7 +7,8 @@ This directory contains test data and sample dbt artifacts used for testing.
 ```
 fixtures/
 ├── README.md              # This file
-├── run_results.json       # Sample dbt run_results.json ✅
+├── dbt_test_results.json  # Output from `dbt test` ✅
+├── dbt_run_results.json   # Output from `dbt run` ✅
 ├── manifest.json          # Sample dbt manifest.json ✅
 └── sample_dbt_project/    # Sample dbt project (jaffle_shop, .gitignored)
 ```
@@ -24,8 +25,8 @@ fixtures/
 
 ## Files
 
-### `run_results.json` ✅
-Sample dbt test execution results file from jaffle shop project.
+### `dbt_test_results.json` ✅
+Output from `dbt test` command - test execution results from jaffle shop project.
 
 **Contains:**
 - **27 test results** (all passed in this sample)
@@ -40,6 +41,24 @@ Sample dbt test execution results file from jaffle shop project.
 - `not_null` - NULL constraint validation
 - `unique` - Uniqueness constraint validation
 - `relationships` - Foreign key validation
+
+### `dbt_run_results.json` ✅
+Output from `dbt run` command - model execution results from jaffle shop project.
+
+**Contains:**
+- **13 model results** (all successful in this sample)
+- Model execution timing information
+- Invocation ID for correlation with lineage events
+- Generated timestamp for eventTime
+- Adapter response metadata (DuckDB - no row counts)
+
+**Key Data for Parser Testing:**
+- `model.jaffle_shop.customers` - mart model with multiple dependencies
+- `model.jaffle_shop.orders` - mart model
+- `model.jaffle_shop.stg_customers` - staging model with source dependency
+
+**Note:** DuckDB adapter doesn't return `rows_affected` in adapter_response.
+Postgres, Snowflake, and BigQuery adapters do provide this field.
 
 ### `manifest.json` ✅
 Sample dbt manifest file with complete project metadata.

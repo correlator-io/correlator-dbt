@@ -306,7 +306,7 @@ def test_emit_event_to_correlator():
 @pytest.fixture
 def sample_run_results():
     """Load sample dbt run_results.json."""
-    with open("tests/fixtures/run_results.json") as f:
+    with open("tests/fixtures/dbt_test_results.json") as f:
         return json.load(f)
 
 def test_with_fixture(sample_run_results):

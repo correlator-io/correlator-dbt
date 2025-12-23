@@ -1,22 +1,33 @@
-"""OpenLineage event emitter for dbt test results.
+"""OpenLineage event emitter for dbt plugin.
 
-This module constructs OpenLineage events with embedded test results using the
-dataQualityAssertions dataset facet, and emits them to Correlator backend.
+This module constructs and emits OpenLineage events to Correlator backend,
+supporting both test results and model lineage with runtime metrics.
+
+Event Types:
+    1. Test Events (dbt test):
+       - dataQualityAssertions facet with test results per dataset
+       - Input datasets only (tests validate, don't produce outputs)
+
+    2. Lineage Events (dbt run/build):
+       - Input/output datasets from model dependencies
+       - outputStatistics facet with row counts (when available)
 
 The emitter handles:
     - Creating wrapping events (START/COMPLETE/FAIL)
     - Grouping test results by dataset
-    - Constructing dataQualityAssertions facets
-    - Building complete OpenLineage RunEvent structures
-    - Batch emission of all events to Correlator
+    - Constructing dataQualityAssertions facets for test results
+    - Constructing outputStatistics facets for runtime metrics
+    - Building model lineage with inputs/outputs
+    - Batch emission of all events to OpenLineage consumers
 
 Architecture:
     Execution integration with wrapping pattern (like dbt-ol):
-    START → [dbt test execution] → Test Events → COMPLETE/FAIL → Batch HTTP POST
+    START → [dbt execution] → Model/Test Events → COMPLETE/FAIL → Batch HTTP POST
 
 OpenLineage Specification:
     - Core spec: https://openlineage.io/docs/spec/object-model
     - dataQualityAssertions facet: https://openlineage.io/docs/spec/facets/dataset-facets/data-quality-assertions
+    - outputStatistics facet: https://openlineage.io/docs/spec/facets/dataset-facets/output-statistics
     - Run cycle: https://openlineage.io/docs/spec/run-cycle
 """
 
@@ -27,13 +38,31 @@ from typing import Any, Optional
 
 import attr
 import requests
-from openlineage.client.event_v2 import InputDataset, Job, Run, RunEvent, RunState
+from openlineage.client.event_v2 import (
+    InputDataset,
+    Job,
+    OutputDataset,
+    Run,
+    RunEvent,
+    RunState,
+)
 from openlineage.client.generated.data_quality_assertions_dataset import (
     Assertion,
     DataQualityAssertionsDatasetFacet,
 )
+from openlineage.client.generated.output_statistics_output_dataset import (
+    OutputStatisticsOutputDatasetFacet,
+)
 
-from .parser import Manifest, RunResults, extract_dataset_info, map_test_status
+from .parser import (
+    Manifest,
+    ModelExecutionResult,
+    ModelLineage,
+    RunResults,
+    build_dataset_info,
+    map_test_status,
+    resolve_test_to_model_node,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +98,7 @@ def create_wrapping_event(
     event_type: str,
     run_id: str,
     job_name: str,
-    namespace: str,
+    job_namespace: str,
     timestamp: datetime,
 ) -> RunEvent:
     """Create START/COMPLETE/FAIL wrapping event.
@@ -81,7 +110,7 @@ def create_wrapping_event(
         event_type: Event type ("START", "COMPLETE", or "FAIL").
         run_id: Unique run identifier (UUID).
         job_name: Job name (e.g., "dbt_test").
-        namespace: OpenLineage namespace (e.g., "dbt").
+        job_namespace: OpenLineage job namespace (e.g., "dbt").
         timestamp: Event timestamp (UTC).
 
     Returns:
@@ -98,7 +127,7 @@ def create_wrapping_event(
         eventType=getattr(RunState, event_type),
         eventTime=timestamp.isoformat(),
         run=Run(runId=run_id),  # type: ignore[call-arg]
-        job=Job(namespace=namespace, name=job_name),  # type: ignore[call-arg]
+        job=Job(namespace=job_namespace, name=job_name),  # type: ignore[call-arg]
         producer=PRODUCER,
         inputs=[],
         outputs=[],
@@ -151,9 +180,10 @@ def group_tests_by_dataset(
         test_kwargs = test_metadata.get("kwargs", {})
         column_name = test_kwargs.get("column_name")
 
-        # Use parser's extract_dataset_info for consistent URN format
+        # Resolve test to model, then build dataset info
         try:
-            dataset_info = extract_dataset_info(result.unique_id, manifest)
+            model_node = resolve_test_to_model_node(test_node, manifest)
+            dataset_info = build_dataset_info(model_node, manifest)
             dataset_urn = f"{dataset_info.namespace}:{dataset_info.name}"
         except (KeyError, ValueError) as e:
             logger.warning(
@@ -179,10 +209,10 @@ def group_tests_by_dataset(
     return grouped
 
 
-def construct_events(
+def construct_test_events(
     run_results: RunResults,
     manifest: Manifest,
-    namespace: str,
+    job_namespace: str,
     job_name: str,
     run_id: str,
 ) -> list[RunEvent]:
@@ -194,7 +224,7 @@ def construct_events(
     Args:
         run_results: Parsed dbt run_results.json.
         manifest: Parsed dbt manifest.json.
-        namespace: OpenLineage namespace (e.g., "dbt", "production").
+        job_namespace: OpenLineage job namespace (e.g., "dbt", "production").
         job_name: Job name for OpenLineage job (e.g., "dbt_test").
         run_id: Unique run identifier to link with wrapping events.
 
@@ -202,7 +232,7 @@ def construct_events(
         List of OpenLineage RunEvents with dataQualityAssertions facets.
 
     Example:
-        >>> events = construct_events(
+        >>> events = construct_test_events(
         ...     run_results, manifest, "dbt", "dbt_test", run_id
         ... )
         >>> len(events)
@@ -220,7 +250,7 @@ def construct_events(
     for dataset_urn, tests in grouped.items():
         # Parse dataset URN: namespace:schema.table
         try:
-            namespace_part, name_part = dataset_urn.split(":", 1)
+            dataset_namespace, name_part = dataset_urn.split(":", 1)
         except ValueError:
             logger.warning(f"Invalid dataset URN format: {dataset_urn}")
             continue
@@ -248,7 +278,7 @@ def construct_events(
 
         # Create dataset with facet
         dataset = InputDataset(  # type: ignore[call-arg]
-            namespace=namespace_part,
+            namespace=dataset_namespace,
             name=name_part,
             inputFacets={"dataQualityAssertions": dqa_facet},
         )
@@ -258,7 +288,7 @@ def construct_events(
             eventType=RunState.COMPLETE,
             eventTime=run_results.metadata.generated_at.isoformat(),
             run=Run(runId=run_id),  # type: ignore[call-arg]
-            job=Job(namespace=namespace, name=job_name),  # type: ignore[call-arg]
+            job=Job(namespace=job_namespace, name=job_name),  # type: ignore[call-arg]
             producer=PRODUCER,
             inputs=[dataset],
             outputs=[],
@@ -270,21 +300,23 @@ def construct_events(
 
 def emit_events(
     events: list[RunEvent],
-    correlator_endpoint: str,
+    endpoint: str,
     api_key: Optional[str] = None,
 ) -> None:
-    """Emit batch of OpenLineage events to Correlator backend.
+    """Emit batch of OpenLineage events to backend.
 
     Sends all events in a single HTTP POST using OpenLineage batch format.
     More efficient than individual emission (50x fewer requests for 50 events).
 
+    Supports any OpenLineage-compatible backend.
+
     Args:
         events: List of OpenLineage RunEvents to emit.
-        correlator_endpoint: OpenLineage API endpoint URL.
+        endpoint: OpenLineage API endpoint URL.
         api_key: Optional API key for authentication (X-API-Key header).
 
     Raises:
-        ConnectionError: If unable to connect to Correlator endpoint.
+        ConnectionError: If unable to connect to endpoint.
         TimeoutError: If request times out.
         ValueError: If response indicates error (4xx/5xx status codes).
 
@@ -318,15 +350,31 @@ def emit_events(
     try:
         # Single HTTP POST with all events
         response = requests.post(
-            correlator_endpoint,
+            endpoint,
             json=event_dicts,
             headers=headers,
             timeout=30,
         )
 
-        # Handle responses
-        if response.status_code == 200:
-            logger.info(f"Successfully emitted {len(events)} events to Correlator")
+        # Handle responses - support various OpenLineage consumers
+        # - 200 with body: Correlator or OL consumer with summary
+        # - 200 without body: Simple acknowledgment
+        # - 204 No Content: Standard OL consumer acknowledgment
+        # - 207 Partial Success: Some events failed
+        if response.status_code in (200, 204):
+            logger.info(f"Successfully emitted {len(events)} events")
+            # Log summary if available in response body (useful for debugging)
+            if response.status_code == 200 and response.text:
+                try:
+                    body = response.json()
+                    if "summary" in body:
+                        summary = body["summary"]
+                        logger.info(
+                            f"Response: {summary.get('successful', 0)} successful, "
+                            f"{summary.get('failed', 0)} failed"
+                        )
+                except (ValueError, KeyError):
+                    pass  # No JSON body or no summary - that's fine
         elif response.status_code == 207:
             # Partial success - some events failed
             body = response.json()
@@ -335,14 +383,156 @@ def emit_events(
                 f"Failed events: {body.get('failed_events', [])}"
             )
         else:
-            # Error response
+            # Error response (4xx/5xx)
             raise ValueError(
-                f"Correlator returned {response.status_code}: {response.text}"
+                f"OpenLineage backend returned {response.status_code}: {response.text}"
             )
 
     except requests.ConnectionError as e:
         raise ConnectionError(
-            f"Failed to connect to Correlator at {correlator_endpoint}: {e}"
+            f"Failed to connect to OpenLineage backend at {endpoint}: {e}"
         ) from e
     except requests.Timeout as e:
-        raise TimeoutError(f"Request to Correlator timed out after 30s: {e}") from e
+        raise TimeoutError(
+            f"Request to OpenLineage backend timed out after 30s: {e}"
+        ) from e
+
+
+def construct_lineage_event(
+    model_lineage: ModelLineage,
+    run_id: str,
+    job_namespace: str,
+    producer: str,
+    event_time: str,
+    execution_result: Optional[ModelExecutionResult] = None,
+) -> RunEvent:
+    """Construct OpenLineage COMPLETE event for model lineage.
+
+    Creates a single RunEvent representing a model's execution with its
+    input dependencies and output dataset. Optionally includes runtime
+    metrics (row count) when execution results are available.
+
+    Args:
+        model_lineage: Lineage information containing inputs and output.
+        run_id: Unique run identifier to link events for correlation.
+        job_namespace: OpenLineage namespace (e.g., "dbt").
+        producer: Producer URL for OpenLineage event.
+        event_time: ISO 8601 timestamp for the event.
+        execution_result: Optional execution metrics from dbt run/build.
+            When provided, adds outputStatistics facet with row count.
+
+    Returns:
+        OpenLineage RunEvent with COMPLETE status, inputs, and output.
+
+    Example:
+        >>> event = construct_lineage_event(
+        ...     model_lineage=lineage,
+        ...     run_id="550e8400-e29b-41d4-a716-446655440000",
+        ...     job_namespace="dbt",
+        ...     producer="https://github.com/correlator-io/dbt-correlator/0.1.0",
+        ...     event_time="2024-01-01T12:00:00Z",
+        ...     execution_result=model_result,
+        ... )
+        >>> event.outputs[0].outputFacets["outputStatistics"].rowCount
+        1500
+
+    Note:
+        Job name is set to model_lineage.unique_id to identify the model.
+        All events should share the same run_id for correlation in Correlator.
+    """
+    # Build input datasets from ModelLineage.inputs
+    inputs = [
+        InputDataset(  # type: ignore[call-arg]
+            namespace=inp.namespace,
+            name=inp.name,
+        )
+        for inp in model_lineage.inputs
+    ]
+
+    # Build output dataset with optional outputStatistics facet
+    output_facets: Optional[dict[str, OutputStatisticsOutputDatasetFacet]] = None
+    if execution_result and execution_result.rows_affected is not None:
+        output_facets = {
+            "outputStatistics": OutputStatisticsOutputDatasetFacet(  # type: ignore[call-arg]
+                rowCount=execution_result.rows_affected
+            )
+        }
+
+    output = OutputDataset(  # type: ignore[call-arg]
+        namespace=model_lineage.output.namespace,
+        name=model_lineage.output.name,
+        outputFacets=output_facets,
+    )
+
+    return RunEvent(  # type: ignore[call-arg]
+        eventType=RunState.COMPLETE,
+        eventTime=event_time,
+        run=Run(runId=run_id),  # type: ignore[call-arg]
+        job=Job(namespace=job_namespace, name=model_lineage.unique_id),  # type: ignore[call-arg]
+        producer=producer,
+        inputs=inputs,
+        outputs=[output],
+    )
+
+
+def construct_lineage_events(
+    model_lineages: list[ModelLineage],
+    run_id: str,
+    job_namespace: str,
+    producer: str,
+    event_time: str,
+    execution_results: Optional[dict[str, ModelExecutionResult]] = None,
+) -> list[RunEvent]:
+    """Construct lineage events for multiple models.
+
+    Creates one RunEvent per model with its inputs and output.
+    All events share the same run_id for correlation.
+
+    Args:
+        model_lineages: List of ModelLineage objects to construct events for.
+        run_id: Unique run identifier shared by all events.
+        job_namespace: OpenLineage namespace (e.g., "dbt").
+        producer: Producer URL for OpenLineage events.
+        event_time: ISO 8601 timestamp for all events.
+        execution_results: Optional dict mapping model unique_id to
+            ModelExecutionResult. Only models with matching results
+            will have outputStatistics facet populated.
+
+    Returns:
+        List of OpenLineage RunEvents, one per model.
+
+    Example:
+        >>> events = construct_lineage_events(
+        ...     model_lineages=lineages,
+        ...     run_id="batch-run-id",
+        ...     job_namespace="dbt",
+        ...     producer="https://github.com/correlator-io/dbt-correlator/0.1.0",
+        ...     event_time="2024-01-01T12:00:00Z",
+        ...     execution_results=model_results,
+        ... )
+        >>> len(events)
+        13  # One event per model
+
+    Note:
+        Empty model_lineages list returns empty list (no events).
+        Used by `run`, `test`, and `build` commands for lineage emission.
+    """
+    events = []
+
+    for lineage in model_lineages:
+        # Get execution result for this model if available
+        exec_result = None
+        if execution_results:
+            exec_result = execution_results.get(lineage.unique_id)
+
+        event = construct_lineage_event(
+            model_lineage=lineage,
+            run_id=run_id,
+            job_namespace=job_namespace,
+            producer=producer,
+            event_time=event_time,
+            execution_result=exec_result,
+        )
+        events.append(event)
+
+    return events

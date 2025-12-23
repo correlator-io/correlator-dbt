@@ -209,6 +209,7 @@ __marimo__/
 # Editor/IDE
 .idea/
 .vscode/
+.cursor/
 
 # Notes
 notes

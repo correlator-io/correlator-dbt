@@ -16,10 +16,13 @@ Implementation follows dbt artifact schema:
 """
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional, cast
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -29,7 +32,7 @@ class TestResult:
     Attributes:
         unique_id: Unique identifier for the test node (e.g., test.my_project.unique_orders_id)
         status: Test execution status (pass, fail, error, skipped)
-        execution_time: Time taken to execute the test in seconds
+        execution_time_seconds: Time taken to execute the test in seconds
         failures: Number of failures (for failed tests)
         message: Error message or additional details
         compiled_code: Compiled SQL for the test
@@ -39,7 +42,7 @@ class TestResult:
 
     unique_id: str
     status: str
-    execution_time: float
+    execution_time_seconds: float
     failures: Optional[int] = None
     message: Optional[str] = None
     compiled_code: Optional[str] = None
@@ -88,6 +91,70 @@ class DatasetInfo:
 
     namespace: str
     name: str
+
+
+@dataclass
+class ModelLineage:
+    """Lineage information for a single dbt model.
+
+    Represents the upstream inputs and downstream output of a dbt model,
+    used for constructing OpenLineage events with complete lineage context.
+
+    Attributes:
+        unique_id: Unique identifier for the model node
+            (e.g., "model.jaffle_shop.customers")
+        name: Model name without project prefix (e.g., "customers")
+        inputs: List of upstream datasets (refs to other models + sources)
+        output: The model itself as output dataset
+
+    Example:
+        >>> lineage = ModelLineage(
+        ...     unique_id="model.jaffle_shop.customers",
+        ...     name="customers",
+        ...     inputs=[DatasetInfo(namespace="duckdb://db", name="main.stg_customers")],
+        ...     output=DatasetInfo(namespace="duckdb://db", name="main.customers"),
+        ... )
+    """
+
+    unique_id: str
+    name: str
+    inputs: list[DatasetInfo]
+    output: DatasetInfo
+
+
+@dataclass
+class ModelExecutionResult:
+    """Execution result for a single model from dbt run.
+
+    Contains runtime metrics extracted from run_results.json for models
+    executed via `dbt run` or `dbt build`. Used to populate OpenLineage
+    outputStatistics facet with row counts and other metrics.
+
+    Attributes:
+        unique_id: Unique identifier for the model node
+            (e.g., "model.jaffle_shop.customers")
+        status: Execution status ("success", "error", "skipped")
+        execution_time_seconds: Time taken to execute the model in seconds
+        rows_affected: Number of rows written (when adapter provides it).
+            None for adapters like DuckDB that don't return row counts.
+            Available for Postgres, Snowflake, BigQuery, etc.
+        message: Execution message or error details
+
+    Example:
+        >>> result = ModelExecutionResult(
+        ...     unique_id="model.jaffle_shop.customers",
+        ...     status="success",
+        ...     execution_time_seconds=1.5,
+        ...     rows_affected=1500,
+        ...     message="OK",
+        ... )
+    """
+
+    unique_id: str
+    status: str
+    execution_time_seconds: float
+    rows_affected: Optional[int] = None
+    message: Optional[str] = None
 
 
 @dataclass
@@ -233,7 +300,8 @@ def parse_run_results(file_path: str) -> RunResults:
         test_result = TestResult(
             unique_id=result_dict.get("unique_id", ""),
             status=result_dict.get("status", ""),
-            execution_time=result_dict.get("execution_time", 0.0),
+            # Note: dbt JSON uses "execution_time", we normalize to execution_time_seconds
+            execution_time_seconds=result_dict.get("execution_time", 0.0),
             failures=result_dict.get("failures"),
             message=result_dict.get("message"),
             compiled_code=result_dict.get("compiled_code"),
@@ -347,6 +415,54 @@ def _extract_model_name(test_node: dict[str, Any], test_unique_id: str) -> str:
     return cast(str, model_name)
 
 
+def resolve_test_to_model_node(
+    test_node: dict[str, Any],
+    manifest: Manifest,
+) -> dict[str, Any]:
+    """Resolve a test node to its target model node.
+
+    Given a test node from manifest, extracts the model reference and
+    returns the corresponding model node. This is the first step in
+    building dataset info from a test.
+
+    Args:
+        test_node: Test node dictionary from manifest.nodes.
+        manifest: Parsed manifest containing all nodes.
+
+    Returns:
+        Model node dictionary that the test validates.
+
+    Raises:
+        ValueError: If test has no refs or ref has no name.
+        KeyError: If referenced model not found in manifest.
+
+    Example:
+        >>> m = parse_manifest("target/manifest.json")
+        >>> test_node = m.nodes["test.jaffle_shop.unique_orders_order_id"]
+        >>> model_node = resolve_test_to_model_node(test_node, m)
+        >>> model_node["name"]
+        'orders'
+    """
+    # Extract unique_id from node
+    test_unique_id = test_node["unique_id"]
+
+    # Extract project name from test_unique_id
+    project_name = _extract_project_name(test_unique_id)
+
+    # Extract model name from test node refs
+    model_name = _extract_model_name(test_node, test_unique_id)
+
+    # Look up model node in manifest
+    model_unique_id = f"model.{project_name}.{model_name}"
+    try:
+        return cast(dict[str, Any], manifest.nodes[model_unique_id])
+    except KeyError as e:
+        raise KeyError(
+            f"Model node not found in manifest: {model_unique_id}. "
+            f"Referenced by test: {test_unique_id}"
+        ) from e
+
+
 def _extract_dataset_location(
     model_node: dict[str, Any], model_unique_id: str
 ) -> DatasetLocation:
@@ -385,65 +501,285 @@ def _extract_dataset_location(
         ) from e
 
 
-def extract_dataset_info(test_unique_id: str, manifest: Manifest) -> DatasetInfo:
-    """Extract dataset namespace and name from test node in manifest.
+def build_dataset_info(
+    node: dict[str, Any],
+    manifest: Manifest,
+    namespace_override: Optional[str] = None,
+) -> DatasetInfo:
+    """Build DatasetInfo from a model/source node.
 
-    Orchestrates the extraction of dataset information by:
-    1. Looking up test node in manifest
-    2. Extracting project name and model reference
-    3. Looking up model node
-    4. Constructing OpenLineage-compatible namespace and name
+    Constructs OpenLineage-compatible dataset information from a dbt node,
+    extracting namespace from manifest metadata and name from node properties.
 
     Args:
-        test_unique_id: Unique test identifier to lookup in manifest.nodes.
-        manifest: Parsed manifest with node metadata.
+        node: Model or source node dictionary from manifest.
+        manifest: Parsed manifest containing adapter_type metadata.
+        namespace_override: Optional override that takes precedence when set.
+            Supports --dataset-namespace CLI option for strict OL compliance.
 
     Returns:
-        DatasetInfo with resolved namespace and name.
-
-    Raises:
-        ValueError: If dataset reference cannot be resolved.
-        KeyError: If test_unique_id not found in manifest or required metadata missing.
+        DatasetInfo with namespace and name for OpenLineage dataset.
 
     Example:
         >>> m = parse_manifest("target/manifest.json")
-        >>> test_id = "test.jaffle_shop.unique_orders_order_id"
-        >>> info = extract_dataset_info(test_id, m)
-        >>> print(info.namespace)  # duckdb://jaffle_shop
-        >>> print(info.name)       # main.orders
+        >>> model = m.nodes["model.jaffle_shop.customers"]
+        >>> info = build_dataset_info(model, m)
+        >>> info.namespace
+        'duckdb://jaffle_shop'
+        >>> info.name
+        'main.customers'
     """
-    # Step 1: Look up test node in manifest
-    try:
-        test_node = manifest.nodes[test_unique_id]
-    except KeyError as e:
-        raise KeyError(
-            f"Test node not found in manifest: {test_unique_id}. "
-            f"Ensure the manifest.json is up-to-date with the test run."
-        ) from e
+    # Extract location components from node
+    database = node["database"]
+    schema = node["schema"]
+    # Table name: alias (models) > identifier (sources) > name
+    table = node.get("alias") or node.get("identifier") or node["name"]
 
-    # Step 2: Extract project name and model name
-    project_name = _extract_project_name(test_unique_id)
-    model_name = _extract_model_name(test_node, test_unique_id)
+    # Build namespace (uses override if provided)
+    namespace = build_namespace(manifest, database, namespace_override)
 
-    # Step 3: Look up model node in manifest
-    model_unique_id = f"model.{project_name}.{model_name}"
-    try:
-        model_node = manifest.nodes[model_unique_id]
-    except KeyError as e:
-        raise KeyError(
-            f"Model node not found in manifest: {model_unique_id}. "
-            f"Referenced by test: {test_unique_id}"
-        ) from e
-
-    # Step 4: Extract database, schema, table from model
-    location = _extract_dataset_location(model_node, model_unique_id)
-
-    # Step 5: Construct OpenLineage namespace and name
-    adapter_type = manifest.metadata.get("adapter_type", "unknown")
-    namespace = f"{adapter_type}://{location.database}"
-    name = f"{location.schema}.{location.table}"
+    # Build name as schema.table
+    name = f"{schema}.{table}"
 
     return DatasetInfo(namespace=namespace, name=name)
+
+
+def build_namespace(
+    manifest: Manifest, database: str, namespace_override: Optional[str] = None
+) -> str:
+    """Build OpenLineage namespace from manifest metadata or override.
+
+    Constructs a namespace string for OpenLineage datasets. If a namespace_override
+    is provided (and non-empty), it takes precedence over manifest-based construction.
+    Otherwise, builds namespace from adapter_type and database.
+
+    Args:
+        manifest: Parsed manifest containing adapter_type metadata.
+        database: Database name to include in namespace.
+        namespace_override: Optional override that takes precedence when set.
+            Supports --dataset-namespace CLI option for strict OL compliance.
+
+    Returns:
+        Namespace string in format "{adapter_type}://{database}" or the override.
+
+    Example:
+        >>> m = parse_manifest("target/manifest.json")
+        >>> build_namespace(m, "jaffle_shop")
+        'duckdb://jaffle_shop'
+        >>> build_namespace(m, "db", namespace_override="postgresql://prod:5432/db")
+        'postgresql://prod:5432/db'
+    """
+    # Use override if provided and non-empty
+    if namespace_override:
+        return namespace_override
+
+    # Build from manifest metadata
+    adapter_type = manifest.metadata.get("adapter_type", "unknown")
+    return f"{adapter_type}://{database}"
+
+
+def extract_model_inputs(
+    model_node: dict[str, Any],
+    manifest: Manifest,
+    namespace_override: Optional[str] = None,
+) -> list[DatasetInfo]:
+    """Extract upstream input datasets from a model's depends_on.nodes.
+
+    Resolves model and source dependencies from depends_on.nodes to DatasetInfo objects.
+    Handles both model refs and source refs.
+
+    Args:
+        model_node: Model node dictionary from manifest.
+        manifest: Parsed manifest containing all nodes and sources.
+        namespace_override: Optional namespace override for all inputs.
+
+    Returns:
+        List of DatasetInfo representing upstream inputs (models and sources).
+
+    Example:
+        >>> m = parse_manifest("target/manifest.json")
+        >>> model = m.nodes["model.jaffle_shop.customers"]
+        >>> inputs = extract_model_inputs(model, m)
+        >>> len(inputs)  # stg_customers, orders
+        2
+    """
+    inputs: list[DatasetInfo] = []
+
+    # Get depends_on.nodes (maybe empty or missing)
+    depends_on = model_node.get("depends_on", {})
+    dep_nodes = depends_on.get("nodes", [])
+
+    for dep_unique_id in dep_nodes:
+        # Handle model dependencies
+        if dep_unique_id.startswith("model."):
+            dep_node = manifest.nodes.get(dep_unique_id)
+            if dep_node:
+                dataset_info = build_dataset_info(
+                    dep_node, manifest, namespace_override
+                )
+                inputs.append(dataset_info)
+            else:
+                logger.warning(
+                    "Dependency model not found in manifest: %s", dep_unique_id
+                )
+        # Handle source dependencies
+        elif dep_unique_id.startswith("source."):
+            source_node = manifest.sources.get(dep_unique_id)
+            if source_node:
+                dataset_info = build_dataset_info(
+                    source_node, manifest, namespace_override
+                )
+                inputs.append(dataset_info)
+            else:
+                logger.warning(
+                    "Dependency source not found in manifest: %s", dep_unique_id
+                )
+        else:
+            # Unknown dependency type (seed, snapshot, etc.)
+            logger.debug("Skipping non-model/source dependency: %s", dep_unique_id)
+
+    return inputs
+
+
+def extract_all_model_lineage(
+    manifest: Manifest,
+    model_ids: Optional[set[str]] = None,
+    namespace_override: Optional[str] = None,
+) -> list[ModelLineage]:
+    """Extract lineage for all models or a filtered set of models.
+
+    Builds ModelLineage objects for each model, containing upstream inputs
+    (dependencies) and the model itself as output.
+
+    Args:
+        manifest: Parsed manifest containing all nodes and sources.
+        model_ids: Optional set of model unique_ids to filter. If None,
+            extracts lineage for all models in manifest.
+        namespace_override: Optional namespace override for all datasets.
+
+    Returns:
+        List of ModelLineage for each model in the filter (or all models).
+
+    Example:
+        >>> m = parse_manifest("target/manifest.json")
+        >>> lineages = extract_all_model_lineage(m)
+        >>> len(lineages)  # One per model
+        13
+        >>> lineages[0].unique_id
+        'model.jaffle_shop.customers'
+    """
+    # Determine which models to process
+    if model_ids is not None:
+        # Use provided filter (could be empty)
+        target_model_ids = model_ids
+    else:
+        # Extract all model IDs from manifest
+        target_model_ids = {k for k in manifest.nodes if k.startswith("model.")}
+
+    lineages: list[ModelLineage] = []
+
+    for model_id in target_model_ids:
+        model_node = manifest.nodes.get(model_id)
+        if not model_node:
+            logger.warning("Model node not found in manifest: %s", model_id)
+            continue
+
+        # Extract model name from node
+        model_name = model_node.get("alias") or model_node["name"]
+
+        # Build output DatasetInfo for this model
+        output = build_dataset_info(model_node, manifest, namespace_override)
+
+        # Extract input DatasetInfo from dependencies
+        inputs = extract_model_inputs(model_node, manifest, namespace_override)
+
+        lineage = ModelLineage(
+            unique_id=model_id,
+            name=model_name,
+            inputs=inputs,
+            output=output,
+        )
+        lineages.append(lineage)
+
+    return lineages
+
+
+def get_executed_models(run_results: RunResults) -> set[str]:
+    """Get model IDs that were executed in dbt run.
+
+    Extracts model unique_ids from run_results by filtering for model.*
+    prefixed results. Used for the `run` and `build` commands.
+
+    Args:
+        run_results: Parsed run_results containing execution results.
+
+    Returns:
+        Set of unique model unique_ids (e.g., {"model.jaffle_shop.customers"}).
+
+    Example:
+        >>> rr = parse_run_results("target/run_results.json")
+        >>> models = get_executed_models(rr)
+        >>> "model.jaffle_shop.customers" in models
+        True
+    """
+    return {
+        result.unique_id
+        for result in run_results.results
+        if result.unique_id.startswith("model.")
+    }
+
+
+def get_models_with_tests(run_results: RunResults, manifest: Manifest) -> set[str]:
+    """Get unique model IDs that have executed tests in run_results.
+
+    Identifies which models have tests by examining test results and resolving
+    their model references. Used to determine which models to emit OpenLineage
+    events for in the test command.
+
+    Args:
+        run_results: Parsed run_results containing test execution results.
+        manifest: Parsed manifest containing test node metadata.
+
+    Returns:
+        Set of unique model unique_ids (e.g., {"model.jaffle_shop.customers"}).
+
+    Example:
+        >>> rr = parse_run_results("target/run_results.json")
+        >>> m = parse_manifest("target/manifest.json")
+        >>> models = get_models_with_tests(rr, m)
+        >>> "model.jaffle_shop.customers" in models
+        True
+    """
+    models: set[str] = set()
+
+    for result in run_results.results:
+        # Skip non-test results
+        if not result.unique_id.startswith("test."):
+            logger.debug("Skipping non-test result: %s", result.unique_id)
+            continue
+
+        # Look up test node in manifest
+        test_node = manifest.nodes.get(result.unique_id)
+        if not test_node:
+            logger.warning("Test node not found in manifest: %s", result.unique_id)
+            continue
+
+        # Extract project name and model name from test
+        try:
+            project_name = _extract_project_name(result.unique_id)
+            model_name = _extract_model_name(test_node, result.unique_id)
+            model_unique_id = f"model.{project_name}.{model_name}"
+            models.add(model_unique_id)
+        except ValueError as e:
+            # Skip tests that don't have valid model refs
+            logger.warning(
+                "Skipping test without valid model ref: %s - %s",
+                result.unique_id,
+                e,
+            )
+            continue
+
+    return models
 
 
 def map_test_status(dbt_status: str) -> bool:
@@ -471,3 +807,53 @@ def map_test_status(dbt_status: str) -> bool:
         False
     """
     return dbt_status.lower() == "pass"
+
+
+def extract_model_results(run_results: RunResults) -> dict[str, ModelExecutionResult]:
+    """Extract model execution results from parsed run_results.
+
+    Extracts model execution metrics from already-parsed RunResults for models
+    executed via `dbt run` or `dbt build`. Filters out non-model results
+    (tests, seeds, snapshots) and returns only model execution data.
+
+    Args:
+        run_results: Parsed RunResults from dbt run/build.
+
+    Returns:
+        Dictionary mapping model unique_id to ModelExecutionResult.
+        Empty dictionary if no models were executed.
+
+    Example:
+        >>> rr = parse_run_results("target/run_results.json")
+        >>> model_results = extract_model_results(rr)
+        >>> result = model_results["model.jaffle_shop.customers"]
+        >>> print(f"Execution time: {result.execution_time_seconds}s")
+        >>> print(f"Rows affected: {result.rows_affected}")
+
+    Note:
+        - rows_affected may be None for adapters that don't return it (e.g., DuckDB)
+        - Available for Postgres, Snowflake, BigQuery, etc.
+    """
+    model_results: dict[str, ModelExecutionResult] = {}
+
+    for result in run_results.results:
+        # Skip non-model results (tests, seeds, snapshots, etc.)
+        if not result.unique_id.startswith("model."):
+            logger.debug("Skipping non-model result: %s", result.unique_id)
+            continue
+
+        # Extract rows_affected from adapter_response if available
+        rows_affected: Optional[int] = None
+        if result.adapter_response:
+            rows_affected = result.adapter_response.get("rows_affected")
+
+        model_result = ModelExecutionResult(
+            unique_id=result.unique_id,
+            status=result.status,
+            execution_time_seconds=result.execution_time_seconds,
+            rows_affected=rows_affected,
+            message=result.message,
+        )
+        model_results[result.unique_id] = model_result
+
+    return model_results
