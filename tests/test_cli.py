@@ -156,14 +156,14 @@ def cli_mocks(
     with (
         patch("dbt_correlator.cli.subprocess.run") as mock_subprocess,
         patch("dbt_correlator.cli.emit_events") as mock_emit,
-        patch("dbt_correlator.cli.construct_events") as mock_construct,
+        patch("dbt_correlator.cli.construct_test_events") as mock_construct,
         patch("dbt_correlator.cli.construct_lineage_events") as mock_lineage_events,
         patch("dbt_correlator.cli.create_wrapping_event") as mock_wrapping,
         patch("dbt_correlator.cli.parse_manifest") as mock_parse_manifest,
         patch("dbt_correlator.cli.parse_run_results") as mock_parse_results,
         patch("dbt_correlator.cli.extract_all_model_lineage") as mock_extract_lineage,
         patch("dbt_correlator.cli.get_executed_models") as mock_get_executed,
-        patch("dbt_correlator.cli.parse_model_results") as mock_parse_model_results,
+        patch("dbt_correlator.cli.extract_model_results") as mock_extract_model_results,
     ):
         # Set default return values
         mock_subprocess.return_value = mock_completed_process_success
@@ -174,7 +174,7 @@ def cli_mocks(
         mock_lineage_events.return_value = [mock_run_event]
         mock_extract_lineage.return_value = []  # Empty list of ModelLineage
         mock_get_executed.return_value = {"model.my_project.users"}
-        mock_parse_model_results.return_value = {}
+        mock_extract_model_results.return_value = {}
 
         yield {
             "subprocess": mock_subprocess,
@@ -186,7 +186,7 @@ def cli_mocks(
             "parse_results": mock_parse_results,
             "extract_lineage": mock_extract_lineage,
             "get_executed": mock_get_executed,
-            "parse_model_results": mock_parse_model_results,
+            "extract_model_results": mock_extract_model_results,
             "run_results": mock_run_results,
             "manifest": mock_manifest,
             "run_event": mock_run_event,
@@ -1098,7 +1098,7 @@ class TestBuildCommand:
             ],
         )
 
-        # Both construct_lineage_events and construct_events should be called
+        # Both construct_lineage_events and construct_test_events should be called
         cli_mocks["construct_lineage"].assert_called_once()
         cli_mocks["construct"].assert_called_once()
 
@@ -1119,7 +1119,7 @@ class TestBuildCommand:
         lineage_call_kwargs = cli_mocks["construct_lineage"].call_args[1]
         lineage_run_id = lineage_call_kwargs.get("run_id")
 
-        # Get run_id from construct_events call
+        # Get run_id from construct_test_events call
         construct_call_kwargs = cli_mocks["construct"].call_args[1]
         construct_run_id = construct_call_kwargs.get("run_id")
 

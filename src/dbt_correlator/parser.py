@@ -822,10 +822,10 @@ def map_test_status(dbt_status: str) -> bool:
     return dbt_status.lower() == "pass"
 
 
-def parse_model_results(run_results: RunResults) -> dict[str, ModelExecutionResult]:
-    """Parse model execution results from run_results.
+def extract_model_results(run_results: RunResults) -> dict[str, ModelExecutionResult]:
+    """Extract model execution results from parsed run_results.
 
-    Extracts model execution metrics from run_results.json for models
+    Extracts model execution metrics from already-parsed RunResults for models
     executed via `dbt run` or `dbt build`. Filters out non-model results
     (tests, seeds, snapshots) and returns only model execution data.
 
@@ -838,7 +838,7 @@ def parse_model_results(run_results: RunResults) -> dict[str, ModelExecutionResu
 
     Example:
         >>> rr = parse_run_results("target/run_results.json")
-        >>> model_results = parse_model_results(rr)
+        >>> model_results = extract_model_results(rr)
         >>> result = model_results["model.jaffle_shop.customers"]
         >>> print(f"Execution time: {result.execution_time_seconds}s")
         >>> print(f"Rows affected: {result.rows_affected}")

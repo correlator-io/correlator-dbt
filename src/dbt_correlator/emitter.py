@@ -97,7 +97,7 @@ def create_wrapping_event(
     event_type: str,
     run_id: str,
     job_name: str,
-    namespace: str,
+    job_namespace: str,
     timestamp: datetime,
 ) -> RunEvent:
     """Create START/COMPLETE/FAIL wrapping event.
@@ -109,7 +109,7 @@ def create_wrapping_event(
         event_type: Event type ("START", "COMPLETE", or "FAIL").
         run_id: Unique run identifier (UUID).
         job_name: Job name (e.g., "dbt_test").
-        namespace: OpenLineage namespace (e.g., "dbt").
+        job_namespace: OpenLineage job namespace (e.g., "dbt").
         timestamp: Event timestamp (UTC).
 
     Returns:
@@ -126,7 +126,7 @@ def create_wrapping_event(
         eventType=getattr(RunState, event_type),
         eventTime=timestamp.isoformat(),
         run=Run(runId=run_id),  # type: ignore[call-arg]
-        job=Job(namespace=namespace, name=job_name),  # type: ignore[call-arg]
+        job=Job(namespace=job_namespace, name=job_name),  # type: ignore[call-arg]
         producer=PRODUCER,
         inputs=[],
         outputs=[],
@@ -207,10 +207,10 @@ def group_tests_by_dataset(
     return grouped
 
 
-def construct_events(
+def construct_test_events(
     run_results: RunResults,
     manifest: Manifest,
-    namespace: str,
+    job_namespace: str,
     job_name: str,
     run_id: str,
 ) -> list[RunEvent]:
@@ -222,7 +222,7 @@ def construct_events(
     Args:
         run_results: Parsed dbt run_results.json.
         manifest: Parsed dbt manifest.json.
-        namespace: OpenLineage namespace (e.g., "dbt", "production").
+        job_namespace: OpenLineage job namespace (e.g., "dbt", "production").
         job_name: Job name for OpenLineage job (e.g., "dbt_test").
         run_id: Unique run identifier to link with wrapping events.
 
@@ -230,7 +230,7 @@ def construct_events(
         List of OpenLineage RunEvents with dataQualityAssertions facets.
 
     Example:
-        >>> events = construct_events(
+        >>> events = construct_test_events(
         ...     run_results, manifest, "dbt", "dbt_test", run_id
         ... )
         >>> len(events)
@@ -248,7 +248,7 @@ def construct_events(
     for dataset_urn, tests in grouped.items():
         # Parse dataset URN: namespace:schema.table
         try:
-            namespace_part, name_part = dataset_urn.split(":", 1)
+            dataset_namespace, name_part = dataset_urn.split(":", 1)
         except ValueError:
             logger.warning(f"Invalid dataset URN format: {dataset_urn}")
             continue
@@ -276,7 +276,7 @@ def construct_events(
 
         # Create dataset with facet
         dataset = InputDataset(  # type: ignore[call-arg]
-            namespace=namespace_part,
+            namespace=dataset_namespace,
             name=name_part,
             inputFacets={"dataQualityAssertions": dqa_facet},
         )
@@ -286,7 +286,7 @@ def construct_events(
             eventType=RunState.COMPLETE,
             eventTime=run_results.metadata.generated_at.isoformat(),
             run=Run(runId=run_id),  # type: ignore[call-arg]
-            job=Job(namespace=namespace, name=job_name),  # type: ignore[call-arg]
+            job=Job(namespace=job_namespace, name=job_name),  # type: ignore[call-arg]
             producer=PRODUCER,
             inputs=[dataset],
             outputs=[],

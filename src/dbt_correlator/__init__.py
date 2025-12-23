@@ -31,7 +31,7 @@ __license__ = "Apache-2.0"
 # Public API exports
 __all__ = [
     "__version__",
-    "construct_events",
+    "construct_test_events",
     "create_wrapping_event",
     "emit_events",
     "group_tests_by_dataset",
@@ -40,7 +40,7 @@ __all__ = [
 ]
 
 from .emitter import (
-    construct_events,
+    construct_test_events,
     create_wrapping_event,
     emit_events,
     group_tests_by_dataset,

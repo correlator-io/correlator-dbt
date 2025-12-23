@@ -38,16 +38,16 @@ from .config import (
 )
 from .emitter import (
     PRODUCER,
-    construct_events,
     construct_lineage_events,
+    construct_test_events,
     create_wrapping_event,
     emit_events,
 )
 from .parser import (
     extract_all_model_lineage,
+    extract_model_results,
     get_executed_models,
     parse_manifest,
-    parse_model_results,
     parse_run_results,
 )
 
@@ -270,7 +270,9 @@ def execute_test_workflow(
         return 1
 
     # 5. Construct test events
-    test_events = construct_events(run_results, manifest, namespace, job_name, run_id)
+    test_events = construct_test_events(
+        run_results, manifest, namespace, job_name, run_id
+    )
 
     # 6. Create terminal event (COMPLETE or FAIL)
     terminal_timestamp = datetime.now(timezone.utc)
@@ -510,8 +512,8 @@ def execute_run_workflow(
         namespace_override=dataset_namespace,
     )
 
-    # 6. Parse runtime metrics from run results
-    execution_results = parse_model_results(run_results)
+    # 6. Extract runtime metrics from run results
+    execution_results = extract_model_results(run_results)
 
     # 7. Construct lineage events with runtime metrics
     event_time = datetime.now(timezone.utc).isoformat()
@@ -764,8 +766,8 @@ def execute_build_workflow(
         namespace_override=dataset_namespace,
     )
 
-    # 6. Parse runtime metrics from run results
-    execution_results = parse_model_results(run_results)
+    # 6. Extract runtime metrics from run results
+    execution_results = extract_model_results(run_results)
 
     # 7. Construct lineage events with runtime metrics
     event_time = datetime.now(timezone.utc).isoformat()
@@ -779,10 +781,10 @@ def execute_build_workflow(
     )
 
     # 8. Construct test events with dataQualityAssertions
-    test_events = construct_events(
+    test_events = construct_test_events(
         run_results=run_results,
         manifest=manifest,
-        namespace=namespace,
+        job_namespace=namespace,
         job_name=job_name,
         run_id=run_id,
     )

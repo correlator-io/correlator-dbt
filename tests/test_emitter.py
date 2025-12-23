@@ -4,7 +4,7 @@ This module contains unit and integration tests for constructing OpenLineage
 events with dataQualityAssertions facets and emitting them to Correlator.
 
 Test Coverage:
-    - construct_events(): Build OpenLineage events with test results
+    - construct_test_events(): Build OpenLineage events with test results
     - emit_events(): Send events to OpenLineage backend
     - group_tests_by_dataset(): Group tests by target dataset
     - dataQualityAssertions facet structure validation
@@ -22,9 +22,9 @@ import requests
 from openlineage.client.event_v2 import RunState
 
 from dbt_correlator.emitter import (
-    construct_events,
     construct_lineage_event,
     construct_lineage_events,
+    construct_test_events,
     create_wrapping_event,
     emit_events,
     group_tests_by_dataset,
@@ -278,7 +278,7 @@ def test_create_wrapping_event_start() -> None:
         event_type="START",
         run_id=run_id,
         job_name="dbt_test",
-        namespace="dbt",
+        job_namespace="dbt",
         timestamp=timestamp,
     )
 
@@ -309,7 +309,7 @@ def test_create_wrapping_event_complete() -> None:
         event_type="COMPLETE",
         run_id=run_id,
         job_name="dbt_test",
-        namespace="dbt",
+        job_namespace="dbt",
         timestamp=timestamp,
     )
 
@@ -339,7 +339,7 @@ def test_create_wrapping_event_fail() -> None:
         event_type="FAIL",
         run_id=run_id,
         job_name="dbt_test",
-        namespace="dbt",
+        job_namespace="dbt",
         timestamp=timestamp,
     )
 
@@ -351,7 +351,7 @@ def test_create_wrapping_event_fail() -> None:
 
 
 # ============================================================================
-# Tests for construct_events()
+# Tests for construct_test_events()
 # ============================================================================
 
 
@@ -374,10 +374,10 @@ def test_construct_event_creates_valid_openlineage_event(
     Note:
         Implementation will use openlineage-python client types.
     """
-    events = construct_events(
+    events = construct_test_events(
         run_results=sample_run_results,
         manifest=sample_manifest,
-        namespace="dbt",
+        job_namespace="dbt",
         job_name="dbt_test_run",
         run_id=sample_run_results.metadata.invocation_id,
     )
@@ -410,10 +410,10 @@ def test_construct_event_includes_data_quality_assertions_facet(
     OpenLineage Spec Reference:
         https://openlineage.io/docs/spec/facets/dataset-facets/data-quality-assertions
     """
-    events = construct_events(
+    events = construct_test_events(
         run_results=sample_run_results,
         manifest=sample_manifest,
-        namespace="dbt",
+        job_namespace="dbt",
         job_name="dbt_test_run",
         run_id="8b09d9b8-6506-438a-89ab-a51da1f0d891",
     )
@@ -455,10 +455,10 @@ def test_construct_event_assertion_structure_for_passed_test(
         - failedCount: 0 or None
         - message: None or success message
     """
-    events = construct_events(
+    events = construct_test_events(
         run_results=sample_run_results,
         manifest=sample_manifest,
-        namespace="dbt",
+        job_namespace="dbt",
         job_name="dbt_test_run",
         run_id="8b09d9b8-6506-438a-89ab-a51da1f0d891",
     )
@@ -499,10 +499,10 @@ def test_construct_event_uses_correct_event_time(
         eventTime represents when test execution completed.
         This enables temporal correlation with other lineage events.
     """
-    events = construct_events(
+    events = construct_test_events(
         run_results=sample_run_results,
         manifest=sample_manifest,
-        namespace="dbt",
+        job_namespace="dbt",
         job_name="dbt_test_run",
         run_id="8b09d9b8-6506-438a-89ab-a51da1f0d891",
     )
@@ -550,10 +550,10 @@ def test_construct_event_uses_invocation_id_as_run_id(
     Reference:
         Plugin Developer Guide, section "Canonical Job Run ID"
     """
-    events = construct_events(
+    events = construct_test_events(
         run_results=sample_run_results,
         manifest=sample_manifest,
-        namespace="dbt",
+        job_namespace="dbt",
         job_name="dbt_test_run",
         run_id=sample_run_results.metadata.invocation_id,
     )
@@ -629,11 +629,11 @@ def test_construct_event_with_custom_namespace_and_job_name() -> None:
         sources={},
     )
 
-    # Test custom namespace
-    events = construct_events(
+    # Test custom job_namespace
+    events = construct_test_events(
         run_results=run_results,
         manifest=manifest,
-        namespace="production",
+        job_namespace="production",
         job_name="nightly_dbt_tests",
         run_id="8b09d9b8-6506-438a-89ab-a51da1f0d891",
     )
@@ -659,10 +659,10 @@ def test_construct_event_serializes_to_json(
 
     This is critical for HTTP transmission to Correlator.
     """
-    events = construct_events(
+    events = construct_test_events(
         run_results=sample_run_results,
         manifest=sample_manifest,
-        namespace="dbt",
+        job_namespace="dbt",
         job_name="dbt_test_run",
         run_id="8b09d9b8-6506-438a-89ab-a51da1f0d891",
     )
@@ -707,7 +707,7 @@ def test_emit_event_sends_post_request_to_correlator(minimal_test_data) -> None:
     """
     run_results, manifest = minimal_test_data
 
-    events = construct_events(
+    events = construct_test_events(
         run_results, manifest, "dbt", "test_job", "eb31681b-641b-4f73-bf93-cc339decae23"
     )
 
@@ -761,7 +761,7 @@ def test_emit_event_handles_success_response(minimal_test_data) -> None:
     """
     run_results, manifest = minimal_test_data
 
-    events = construct_events(
+    events = construct_test_events(
         run_results, manifest, "dbt", "test_job", "eb31681b-641b-4f73-bf93-cc339decae23"
     )
 
@@ -817,7 +817,7 @@ def test_emit_event_handles_partial_success_response(minimal_test_data) -> None:
     """
     run_results, manifest = minimal_test_data
 
-    events = construct_events(
+    events = construct_test_events(
         run_results, manifest, "dbt", "test_job", "eb31681b-641b-4f73-bf93-cc339decae23"
     )
 
@@ -865,7 +865,7 @@ def test_emit_event_with_api_key_includes_header(minimal_test_data) -> None:
     """
     run_results, manifest = minimal_test_data
 
-    events = construct_events(
+    events = construct_test_events(
         run_results, manifest, "dbt", "test_job", "eb31681b-641b-4f73-bf93-cc339decae23"
     )
 
@@ -911,7 +911,7 @@ def test_emit_event_handles_connection_error(minimal_test_data) -> None:
     """
     run_results, manifest = minimal_test_data
 
-    events = construct_events(
+    events = construct_test_events(
         run_results, manifest, "dbt", "test_job", "eb31681b-641b-4f73-bf93-cc339decae23"
     )
 
@@ -944,7 +944,7 @@ def test_emit_event_handles_http_error_response(minimal_test_data) -> None:
     """
     run_results, manifest = minimal_test_data
 
-    events = construct_events(
+    events = construct_test_events(
         run_results, manifest, "dbt", "test_job", "eb31681b-641b-4f73-bf93-cc339decae23"
     )
 
@@ -981,7 +981,7 @@ def test_emit_event_handles_timeout(minimal_test_data) -> None:
     """
     run_results, manifest = minimal_test_data
 
-    events = construct_events(
+    events = construct_test_events(
         run_results, manifest, "dbt", "test_job", "eb31681b-641b-4f73-bf93-cc339decae23"
     )
 
@@ -1473,7 +1473,7 @@ def test_emit_events_handles_204_no_content(minimal_test_data) -> None:
     """
     run_results, manifest = minimal_test_data
 
-    events = construct_events(
+    events = construct_test_events(
         run_results, manifest, "dbt", "test_job", "eb31681b-641b-4f73-bf93-cc339decae23"
     )
 
@@ -1500,7 +1500,7 @@ def test_emit_events_handles_200_with_body(minimal_test_data) -> None:
     """
     run_results, manifest = minimal_test_data
 
-    events = construct_events(
+    events = construct_test_events(
         run_results, manifest, "dbt", "test_job", "eb31681b-641b-4f73-bf93-cc339decae23"
     )
 
@@ -1528,7 +1528,7 @@ def test_emit_events_handles_200_without_body(minimal_test_data) -> None:
     """
     run_results, manifest = minimal_test_data
 
-    events = construct_events(
+    events = construct_test_events(
         run_results, manifest, "dbt", "test_job", "eb31681b-641b-4f73-bf93-cc339decae23"
     )
 

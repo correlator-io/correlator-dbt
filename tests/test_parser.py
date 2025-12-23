@@ -39,11 +39,11 @@ from dbt_correlator.parser import (
     extract_all_model_lineage,
     extract_dataset_info,
     extract_model_inputs,
+    extract_model_results,
     get_executed_models,
     get_models_with_tests,
     map_test_status,
     parse_manifest,
-    parse_model_results,
     parse_run_results,
 )
 
@@ -1632,7 +1632,7 @@ def test_model_execution_result_optional_fields() -> None:
 
 
 @pytest.mark.unit
-def test_parse_model_results_from_fixture() -> None:
+def test_extract_model_results_from_fixture() -> None:
     """Test parsing model execution results from real dbt run output.
 
     Validates:
@@ -1644,7 +1644,7 @@ def test_parse_model_results_from_fixture() -> None:
     run_results = parse_run_results(str(DBT_RUN_RESULTS_PATH))
 
     # Act: Parse model results
-    model_results = parse_model_results(run_results)
+    model_results = extract_model_results(run_results)
 
     # Assert: Returns dictionary
     assert isinstance(model_results, dict)
@@ -1661,8 +1661,8 @@ def test_parse_model_results_from_fixture() -> None:
 
 
 @pytest.mark.unit
-def test_parse_model_results_extracts_execution_time() -> None:
-    """Test that parse_model_results extracts execution_time correctly.
+def test_extract_model_results_extracts_execution_time() -> None:
+    """Test that extract_model_results extracts execution_time correctly.
 
     Validates:
         - execution_time_seconds is extracted from run_results
@@ -1672,7 +1672,7 @@ def test_parse_model_results_extracts_execution_time() -> None:
     run_results = parse_run_results(str(DBT_RUN_RESULTS_PATH))
 
     # Act: Parse model results
-    model_results = parse_model_results(run_results)
+    model_results = extract_model_results(run_results)
 
     # Assert: Execution time is extracted as positive float
     customers_result = model_results["model.jaffle_shop.customers"]
@@ -1681,8 +1681,8 @@ def test_parse_model_results_extracts_execution_time() -> None:
 
 
 @pytest.mark.unit
-def test_parse_model_results_extracts_status() -> None:
-    """Test that parse_model_results extracts status correctly.
+def test_extract_model_results_extracts_status() -> None:
+    """Test that extract_model_results extracts status correctly.
 
     Validates:
         - status field is extracted (success, error, skipped)
@@ -1691,7 +1691,7 @@ def test_parse_model_results_extracts_status() -> None:
     run_results = parse_run_results(str(DBT_RUN_RESULTS_PATH))
 
     # Act: Parse model results
-    model_results = parse_model_results(run_results)
+    model_results = extract_model_results(run_results)
 
     # Assert: Status is extracted
     customers_result = model_results["model.jaffle_shop.customers"]
@@ -1699,8 +1699,8 @@ def test_parse_model_results_extracts_status() -> None:
 
 
 @pytest.mark.unit
-def test_parse_model_results_handles_missing_rows_affected() -> None:
-    """Test that parse_model_results handles missing rows_affected.
+def test_extract_model_results_handles_missing_rows_affected() -> None:
+    """Test that extract_model_results handles missing rows_affected.
 
     Validates:
         - rows_affected is None when adapter doesn't provide it
@@ -1710,7 +1710,7 @@ def test_parse_model_results_handles_missing_rows_affected() -> None:
     run_results = parse_run_results(str(DBT_RUN_RESULTS_PATH))
 
     # Act: Parse model results
-    model_results = parse_model_results(run_results)
+    model_results = extract_model_results(run_results)
 
     # Assert: rows_affected is None for DuckDB
     customers_result = model_results["model.jaffle_shop.customers"]
@@ -1718,8 +1718,8 @@ def test_parse_model_results_handles_missing_rows_affected() -> None:
 
 
 @pytest.mark.unit
-def test_parse_model_results_extracts_rows_affected_when_present() -> None:
-    """Test that parse_model_results extracts rows_affected when adapter provides it.
+def test_extract_model_results_extracts_rows_affected_when_present() -> None:
+    """Test that extract_model_results extracts rows_affected when adapter provides it.
 
     Validates:
         - rows_affected is extracted from adapter_response when present
@@ -1748,7 +1748,7 @@ def test_parse_model_results_extracts_rows_affected_when_present() -> None:
     )
 
     # Act: Parse model results
-    model_results = parse_model_results(run_results)
+    model_results = extract_model_results(run_results)
 
     # Assert: rows_affected is extracted
     assert "model.project.customers" in model_results
@@ -1756,8 +1756,8 @@ def test_parse_model_results_extracts_rows_affected_when_present() -> None:
 
 
 @pytest.mark.unit
-def test_parse_model_results_filters_non_model_results() -> None:
-    """Test that parse_model_results ignores non-model results.
+def test_extract_model_results_filters_non_model_results() -> None:
+    """Test that extract_model_results ignores non-model results.
 
     Validates:
         - test.* results are ignored
@@ -1797,7 +1797,7 @@ def test_parse_model_results_filters_non_model_results() -> None:
     )
 
     # Act: Parse model results
-    model_results = parse_model_results(run_results)
+    model_results = extract_model_results(run_results)
 
     # Assert: Only model results included
     assert len(model_results) == 2
@@ -1808,8 +1808,8 @@ def test_parse_model_results_filters_non_model_results() -> None:
 
 
 @pytest.mark.unit
-def test_parse_model_results_empty_run_results() -> None:
-    """Test that parse_model_results handles empty run_results.
+def test_extract_model_results_empty_run_results() -> None:
+    """Test that extract_model_results handles empty run_results.
 
     Validates:
         - Empty run_results returns empty dictionary
@@ -1827,15 +1827,15 @@ def test_parse_model_results_empty_run_results() -> None:
     )
 
     # Act: Parse model results
-    model_results = parse_model_results(run_results)
+    model_results = extract_model_results(run_results)
 
     # Assert: Empty dictionary returned
     assert model_results == {}
 
 
 @pytest.mark.unit
-def test_parse_model_results_handles_error_status() -> None:
-    """Test that parse_model_results handles error status models.
+def test_extract_model_results_handles_error_status() -> None:
+    """Test that extract_model_results handles error status models.
 
     Validates:
         - Error status models are included
@@ -1860,7 +1860,7 @@ def test_parse_model_results_handles_error_status() -> None:
     )
 
     # Act: Parse model results
-    model_results = parse_model_results(run_results)
+    model_results = extract_model_results(run_results)
 
     # Assert: Error model is included with error status
     assert "model.project.broken_model" in model_results
@@ -1870,8 +1870,8 @@ def test_parse_model_results_handles_error_status() -> None:
 
 
 @pytest.mark.unit
-def test_parse_model_results_handles_skipped_status() -> None:
-    """Test that parse_model_results handles skipped status models.
+def test_extract_model_results_handles_skipped_status() -> None:
+    """Test that extract_model_results handles skipped status models.
 
     Validates:
         - Skipped models are included in results
@@ -1902,7 +1902,7 @@ def test_parse_model_results_handles_skipped_status() -> None:
     )
 
     # Act: Parse model results
-    model_results = parse_model_results(run_results)
+    model_results = extract_model_results(run_results)
 
     # Assert: Both models are included
     assert len(model_results) == 2
