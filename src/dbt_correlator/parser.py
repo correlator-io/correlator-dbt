@@ -352,7 +352,7 @@ def parse_manifest(file_path: str) -> Manifest:
     return Manifest(nodes=nodes, sources=sources, metadata=metadata)
 
 
-def _extract_project_name(test_unique_id: str) -> str:
+def extract_project_name(test_unique_id: str) -> str:
     """Extract project name from test unique_id.
 
     Args:
@@ -365,7 +365,7 @@ def _extract_project_name(test_unique_id: str) -> str:
         ValueError: If unique_id format is invalid.
 
     Example:
-        >>> _extract_project_name("test.jaffle_shop.unique_customers.abc123")
+        >>> extract_project_name("test.jaffle_shop.unique_customers.abc123")
         'jaffle_shop'
     """
     try:
@@ -378,7 +378,7 @@ def _extract_project_name(test_unique_id: str) -> str:
         ) from e
 
 
-def _extract_model_name(test_node: dict[str, Any], test_unique_id: str) -> str:
+def extract_model_name(test_node: dict[str, Any], test_unique_id: str) -> str:
     """Extract model name from test node refs.
 
     Args:
@@ -393,7 +393,7 @@ def _extract_model_name(test_node: dict[str, Any], test_unique_id: str) -> str:
 
     Example:
         >>> test_node = {"refs": [{"name": "customers"}]}
-        >>> _extract_model_name(test_node, "test.proj.test_1.abc")
+        >>> extract_model_name(test_node, "test.proj.test_1.abc")
         'customers'
     """
     refs = test_node.get("refs", [])
@@ -447,10 +447,10 @@ def resolve_test_to_model_node(
     test_unique_id = test_node["unique_id"]
 
     # Extract project name from test_unique_id
-    project_name = _extract_project_name(test_unique_id)
+    project_name = extract_project_name(test_unique_id)
 
     # Extract model name from test node refs
-    model_name = _extract_model_name(test_node, test_unique_id)
+    model_name = extract_model_name(test_node, test_unique_id)
 
     # Look up model node in manifest
     model_unique_id = f"model.{project_name}.{model_name}"
@@ -463,7 +463,7 @@ def resolve_test_to_model_node(
         ) from e
 
 
-def _extract_dataset_location(
+def extract_dataset_location(
     model_node: dict[str, Any], model_unique_id: str
 ) -> DatasetLocation:
     """Extract database, schema, table from model node.
@@ -480,7 +480,7 @@ def _extract_dataset_location(
 
     Example:
         >>> model = {"database": "analytics", "schema": "dbt_prod", "name": "customers"}
-        >>> location = _extract_dataset_location(model, "model.proj.customers")
+        >>> location = extract_dataset_location(model, "model.proj.customers")
         >>> location.database
         'analytics'
         >>> location.schema
@@ -766,8 +766,8 @@ def get_models_with_tests(run_results: RunResults, manifest: Manifest) -> set[st
 
         # Extract project name and model name from test
         try:
-            project_name = _extract_project_name(result.unique_id)
-            model_name = _extract_model_name(test_node, result.unique_id)
+            project_name = extract_project_name(result.unique_id)
+            model_name = extract_model_name(test_node, result.unique_id)
             model_unique_id = f"model.{project_name}.{model_name}"
             models.add(model_unique_id)
         except ValueError as e:

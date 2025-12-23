@@ -32,14 +32,14 @@ from dbt_correlator.parser import (
     RunResults,
     RunResultsMetadata,
     TestResult,
-    _extract_dataset_location,
-    _extract_model_name,
-    _extract_project_name,
     build_dataset_info,
     build_namespace,
     extract_all_model_lineage,
+    extract_dataset_location,
     extract_model_inputs,
+    extract_model_name,
     extract_model_results,
+    extract_project_name,
     get_executed_models,
     get_models_with_tests,
     map_test_status,
@@ -573,7 +573,7 @@ def test_extract_project_name_valid() -> None:
     test_unique_id = "test.jaffle_shop.unique_customers_customer_id.c5af1ff4b1"
 
     # Act: Extract project name
-    project_name = _extract_project_name(test_unique_id)
+    project_name = extract_project_name(test_unique_id)
 
     # Assert: Should return correct project name
     assert (
@@ -594,7 +594,7 @@ def test_extract_project_name_invalid_format() -> None:
 
     # Act & Assert: Should raise ValueError
     with pytest.raises(ValueError) as exc_info:  # noqa: PT011
-        _extract_project_name(invalid_unique_id)
+        extract_project_name(invalid_unique_id)
 
     # Assert: Error message should mention format
     error_message = str(exc_info.value)
@@ -610,7 +610,7 @@ def test_extract_project_name_empty_string() -> None:
     """
     # Act & Assert: Should raise ValueError
     with pytest.raises(ValueError) as exc_info:  # noqa: PT011
-        _extract_project_name("")
+        extract_project_name("")
 
     # Assert: Error message should be helpful
     error_message = str(exc_info.value)
@@ -630,7 +630,7 @@ def test_get_model_name_from_test_valid() -> None:
     test_unique_id = "test.jaffle_shop.unique_customers_customer_id.c5af1ff4b1"
 
     # Act: Extract model name
-    model_name = _extract_model_name(test_node, test_unique_id)
+    model_name = extract_model_name(test_node, test_unique_id)
 
     # Assert: Should return correct model name
     assert model_name == "customers", f"Expected 'customers', got '{model_name}'"
@@ -647,7 +647,7 @@ def test_get_model_name_from_test_multiple_refs() -> None:
     test_unique_id = "test.jaffle_shop.referential_integrity.abc123"
 
     # Act: Extract model name
-    model_name = _extract_model_name(test_node, test_unique_id)
+    model_name = extract_model_name(test_node, test_unique_id)
 
     # Assert: Should return first ref (MVP behavior)
     assert (
@@ -669,7 +669,7 @@ def test_get_model_name_from_test_no_refs() -> None:
 
     # Act & Assert: Should raise ValueError
     with pytest.raises(ValueError) as exc_info:  # noqa: PT011
-        _extract_model_name(test_node, test_unique_id)
+        extract_model_name(test_node, test_unique_id)
 
     # Assert: Error message should mention refs
     error_message = str(exc_info.value)
@@ -689,7 +689,7 @@ def test_get_model_name_from_test_empty_refs() -> None:
 
     # Act & Assert: Should raise ValueError
     with pytest.raises(ValueError) as exc_info:  # noqa: PT011
-        _extract_model_name(test_node, test_unique_id)
+        extract_model_name(test_node, test_unique_id)
 
     # Assert: Error message should be helpful
     error_message = str(exc_info.value)
@@ -708,7 +708,7 @@ def test_get_model_name_from_test_ref_without_name() -> None:
 
     # Act & Assert: Should raise ValueError
     with pytest.raises(ValueError) as exc_info:  # noqa: PT011
-        _extract_model_name(test_node, test_unique_id)
+        extract_model_name(test_node, test_unique_id)
 
     # Assert: Error message should mention name issue
     error_message = str(exc_info.value)
@@ -728,7 +728,7 @@ def test_extract_dataset_location_valid() -> None:
     model_unique_id = "model.jaffle_shop.customers"
 
     # Act: Extract location
-    location = _extract_dataset_location(model_node, model_unique_id)
+    location = extract_dataset_location(model_node, model_unique_id)
 
     # Assert: Should return DatasetLocation instance
     assert isinstance(
@@ -761,7 +761,7 @@ def test_extract_dataset_location_with_alias() -> None:
     model_unique_id = "model.my_project.stg_customers"
 
     # Act: Extract location
-    location = _extract_dataset_location(model_node, model_unique_id)
+    location = extract_dataset_location(model_node, model_unique_id)
 
     # Assert: Should use alias instead of name
     assert (
@@ -783,7 +783,7 @@ def test_extract_dataset_location_missing_database() -> None:
 
     # Act & Assert: Should raise KeyError
     with pytest.raises(KeyError) as exc_info:
-        _extract_dataset_location(model_node, model_unique_id)
+        extract_dataset_location(model_node, model_unique_id)
 
     # Assert: Error message should mention missing fields
     error_message = str(exc_info.value)
@@ -803,7 +803,7 @@ def test_extract_dataset_location_missing_schema() -> None:
 
     # Act & Assert: Should raise KeyError
     with pytest.raises(KeyError) as exc_info:
-        _extract_dataset_location(model_node, model_unique_id)
+        extract_dataset_location(model_node, model_unique_id)
 
     # Assert: Error message should be helpful
     error_message = str(exc_info.value)
@@ -822,7 +822,7 @@ def test_extract_dataset_location_missing_name_and_alias() -> None:
 
     # Act & Assert: Should raise KeyError
     with pytest.raises(KeyError) as exc_info:
-        _extract_dataset_location(model_node, model_unique_id)
+        extract_dataset_location(model_node, model_unique_id)
 
     # Assert: Error message should be helpful
     error_message = str(exc_info.value)
