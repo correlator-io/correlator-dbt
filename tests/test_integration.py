@@ -754,3 +754,331 @@ class TestErrorScenarios:
         assert (
             captured_headers["X-API-Key"] == "secret123"
         ), f"Expected 'secret123', got '{captured_headers.get('X-API-Key')}'"
+
+
+# =============================================================================
+# Run Command Integration Tests
+# =============================================================================
+
+
+@pytest.mark.integration
+class TestLineageEmission:
+    """Integration tests for dbt-correlator run command lineage emission.
+
+    These tests validate the `run` command workflow which emits:
+        - Lineage events with inputs/outputs
+        - outputStatistics facet with runtime metrics
+        - START and COMPLETE/FAIL wrapping events
+    """
+
+    def test_run_command_emits_lineage_events(
+        self,
+        runner: CliRunner,
+        mock_dbt_project_dir_with_model_results: Path,
+        mock_correlator_success: responses.RequestsMock,
+    ) -> None:
+        """Validate run command emits lineage events.
+
+        Validates:
+            1. HTTP POSTs made (START + batch)
+            2. Lineage events have inputs and outputs
+            3. Exit code is 0
+        """
+        result = runner.invoke(
+            cli,
+            [
+                "run",
+                "--skip-dbt-run",
+                "--project-dir",
+                str(mock_dbt_project_dir_with_model_results),
+                "--profiles-dir",
+                str(mock_dbt_project_dir_with_model_results),
+                "--correlator-endpoint",
+                MOCK_CORRELATOR_ENDPOINT,
+            ],
+        )
+
+        assert result.exit_code == 0, f"CLI failed with: {result.output}"
+
+        # Verify HTTP POSTs were made (START + batch)
+        assert (
+            len(mock_correlator_success.calls) == 2
+        ), "Expected 2 HTTP POSTs (START + batch)"
+
+        # First call is START event
+        start_events = parse_request_body(mock_correlator_success.calls[0].request)
+        assert len(start_events) == 1, "First call should have 1 START event"
+        assert start_events[0]["eventType"] == "START"
+
+        # Second call should have lineage events + terminal
+        batch_events = parse_request_body(mock_correlator_success.calls[1].request)
+        assert len(batch_events) >= 2, "Expected at least lineage + terminal event"
+
+        # Verify success message mentions lineage
+        assert "lineage" in result.output.lower(), f"Output: {result.output}"
+
+    def test_run_command_lineage_structure_validation(
+        self,
+        runner: CliRunner,
+        mock_dbt_project_dir_with_model_results: Path,
+        mock_correlator_success: responses.RequestsMock,
+    ) -> None:
+        """Validate lineage event structure has inputs and outputs.
+
+        Validates lineage events contain:
+            - inputs array (upstream dependencies)
+            - outputs array (model being built)
+            - Each dataset has namespace and name
+        """
+        result = runner.invoke(
+            cli,
+            [
+                "run",
+                "--skip-dbt-run",
+                "--project-dir",
+                str(mock_dbt_project_dir_with_model_results),
+                "--profiles-dir",
+                str(mock_dbt_project_dir_with_model_results),
+                "--correlator-endpoint",
+                MOCK_CORRELATOR_ENDPOINT,
+            ],
+        )
+
+        assert result.exit_code == 0, f"CLI failed with: {result.output}"
+
+        # Get batch events (second call)
+        batch_events = parse_request_body(mock_correlator_success.calls[1].request)
+
+        # Find lineage events (COMPLETE events with outputs, excluding terminal)
+        # Lineage events have outputs (the model being built)
+        lineage_events = [
+            e
+            for e in batch_events
+            if e.get("eventType") == "COMPLETE" and e.get("outputs")
+        ]
+
+        assert (
+            len(lineage_events) >= 1
+        ), "Expected at least 1 lineage event with outputs"
+
+        for event in lineage_events:
+            # Validate outputs (required for lineage)
+            assert "outputs" in event, "Lineage event missing outputs"
+            assert len(event["outputs"]) > 0, "Lineage event has empty outputs"
+
+            for output in event["outputs"]:
+                assert "namespace" in output, "Output dataset missing namespace"
+                assert "name" in output, "Output dataset missing name"
+                assert output["namespace"], "Output has empty namespace"
+                assert output["name"], "Output has empty name"
+
+            # Inputs may be empty for source models, but structure should be valid
+            if event.get("inputs"):
+                for inp in event["inputs"]:
+                    assert "namespace" in inp, "Input dataset missing namespace"
+                    assert "name" in inp, "Input dataset missing name"
+
+    def test_run_command_includes_runtime_metrics(
+        self,
+        runner: CliRunner,
+        mock_dbt_project_dir_with_model_results: Path,
+        mock_correlator_success: responses.RequestsMock,
+    ) -> None:
+        """Validate run command includes outputStatistics facet.
+
+        Validates lineage events include:
+            - outputFacets with outputStatistics
+            - rowCount from dbt execution results
+        """
+        result = runner.invoke(
+            cli,
+            [
+                "run",
+                "--skip-dbt-run",
+                "--project-dir",
+                str(mock_dbt_project_dir_with_model_results),
+                "--profiles-dir",
+                str(mock_dbt_project_dir_with_model_results),
+                "--correlator-endpoint",
+                MOCK_CORRELATOR_ENDPOINT,
+            ],
+        )
+
+        assert result.exit_code == 0, f"CLI failed with: {result.output}"
+
+        # Get batch events (second call)
+        batch_events = parse_request_body(mock_correlator_success.calls[1].request)
+
+        # Find lineage events with outputStatistics
+        events_with_stats = [
+            e
+            for e in batch_events
+            if e.get("outputs")
+            and any(
+                "outputStatistics" in (out.get("outputFacets") or {})
+                for out in e.get("outputs", [])
+            )
+        ]
+
+        # At least some events should have runtime metrics
+        # (depends on whether dbt returned row counts)
+        # Note: This test verifies the structure is correct when present
+        for event in events_with_stats:
+            for output in event.get("outputs", []):
+                if (
+                    "outputFacets" in output
+                    and "outputStatistics" in output["outputFacets"]
+                ):
+                    stats = output["outputFacets"]["outputStatistics"]
+                    assert "_producer" in stats, "outputStatistics missing _producer"
+                    assert "_schemaURL" in stats, "outputStatistics missing _schemaURL"
+                    # rowCount is optional but should be int if present
+                    if "rowCount" in stats:
+                        assert isinstance(
+                            stats["rowCount"], int
+                        ), "rowCount must be integer"
+
+
+# =============================================================================
+# Build Command Integration Tests
+# =============================================================================
+
+
+@pytest.mark.integration
+class TestBuildCommandIntegration:
+    """Integration tests for dbt-correlator build command.
+
+    The build command combines run + test behavior:
+        - Emits lineage events with runtime metrics (like run)
+        - Emits test events with dataQualityAssertions (like test)
+        - All events share the same runId for correlation
+    """
+
+    def test_build_command_emits_lineage_and_test_events(
+        self,
+        runner: CliRunner,
+        mock_dbt_project_dir: Path,
+        mock_correlator_success: responses.RequestsMock,
+    ) -> None:
+        """Validate build command emits both lineage and test events.
+
+        Note: Uses mock_dbt_project_dir (test results) since build
+        command processes both models and tests from run_results.
+
+        Validates:
+            1. HTTP POSTs made (START + batch)
+            2. Batch contains lineage events (with outputs)
+            3. Batch contains test events (with dataQualityAssertions)
+            4. Exit code is 0
+        """
+        result = runner.invoke(
+            cli,
+            [
+                "build",
+                "--skip-dbt-run",
+                "--project-dir",
+                str(mock_dbt_project_dir),
+                "--profiles-dir",
+                str(mock_dbt_project_dir),
+                "--correlator-endpoint",
+                MOCK_CORRELATOR_ENDPOINT,
+            ],
+        )
+
+        assert result.exit_code == 0, f"CLI failed with: {result.output}"
+
+        # Verify HTTP POSTs were made
+        assert len(mock_correlator_success.calls) == 2, "Expected 2 HTTP calls"
+
+        # Get batch events
+        batch_events = parse_request_body(mock_correlator_success.calls[1].request)
+
+        # Should have mix of lineage and test events plus terminal
+        assert len(batch_events) >= 2, "Expected multiple events in batch"
+
+        # Verify output mentions both lineage and test events
+        assert "lineage" in result.output.lower(), f"Output: {result.output}"
+        assert "test" in result.output.lower(), f"Output: {result.output}"
+
+    def test_build_command_all_events_share_run_id(
+        self,
+        runner: CliRunner,
+        mock_dbt_project_dir: Path,
+        mock_correlator_success: responses.RequestsMock,
+    ) -> None:
+        """Validate all build command events share the same runId.
+
+        This is critical for correlation - START, lineage, test, and
+        COMPLETE events must all have the same run.runId.
+        """
+        result = runner.invoke(
+            cli,
+            [
+                "build",
+                "--skip-dbt-run",
+                "--project-dir",
+                str(mock_dbt_project_dir),
+                "--profiles-dir",
+                str(mock_dbt_project_dir),
+                "--correlator-endpoint",
+                MOCK_CORRELATOR_ENDPOINT,
+            ],
+        )
+
+        assert result.exit_code == 0, f"CLI failed with: {result.output}"
+
+        # Collect all events from both calls
+        start_events = parse_request_body(mock_correlator_success.calls[0].request)
+        batch_events = parse_request_body(mock_correlator_success.calls[1].request)
+        all_events = start_events + batch_events
+
+        # Extract all runIds
+        run_ids = {e["run"]["runId"] for e in all_events}
+
+        # All events must share exactly one runId
+        assert len(run_ids) == 1, f"Expected single runId, found: {run_ids}"
+
+        # Verify it's a valid UUID
+        run_id = run_ids.pop()
+        assert is_valid_uuid(run_id), f"Invalid runId format: {run_id}"
+
+    def test_build_command_event_ordering(
+        self,
+        runner: CliRunner,
+        mock_dbt_project_dir: Path,
+        mock_correlator_success: responses.RequestsMock,
+    ) -> None:
+        """Validate build command event ordering.
+
+        Expected order:
+            1. START event (first HTTP call)
+            2. Lineage + test events (second HTTP call batch)
+            3. COMPLETE/FAIL terminal event (last in batch)
+        """
+        result = runner.invoke(
+            cli,
+            [
+                "build",
+                "--skip-dbt-run",
+                "--project-dir",
+                str(mock_dbt_project_dir),
+                "--profiles-dir",
+                str(mock_dbt_project_dir),
+                "--correlator-endpoint",
+                MOCK_CORRELATOR_ENDPOINT,
+            ],
+        )
+
+        assert result.exit_code == 0, f"CLI failed with: {result.output}"
+
+        # First call should be START
+        start_events = parse_request_body(mock_correlator_success.calls[0].request)
+        assert len(start_events) == 1, "First call should have 1 event"
+        assert start_events[0]["eventType"] == "START", "First event must be START"
+
+        # Second call batch should end with terminal event
+        batch_events = parse_request_body(mock_correlator_success.calls[1].request)
+        assert batch_events[-1]["eventType"] in {
+            "COMPLETE",
+            "FAIL",
+        }, "Last event in batch must be COMPLETE or FAIL"

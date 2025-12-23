@@ -52,14 +52,15 @@ def fixtures_dir() -> Path:
 
 @pytest.fixture
 def mock_dbt_project_dir(fixtures_dir: Path, tmp_path: Path) -> Path:
-    """Create a mock dbt project directory with committed fixtures.
+    """Create a mock dbt project directory with test results fixtures.
 
     The CLI expects artifacts at {project_dir}/target/. This fixture creates
     a temporary directory structure with symlinks to the committed fixtures:
         - {tmp_path}/target/manifest.json -> fixtures/manifest.json
         - {tmp_path}/target/run_results.json -> fixtures/dbt_test_results.json
 
-    This ensures tests work in CI where sample_dbt_project is gitignored.
+    This fixture is used for testing the `test` command which expects
+    test execution results.
 
     Args:
         fixtures_dir: Path to fixtures directory with committed artifacts.
@@ -83,6 +84,42 @@ def mock_dbt_project_dir(fixtures_dir: Path, tmp_path: Path) -> Path:
     # Symlink artifacts (faster than copying)
     (target_dir / "manifest.json").symlink_to(manifest_path)
     # Symlink to dbt_test_results.json but CLI expects run_results.json in target/
+    (target_dir / "run_results.json").symlink_to(run_results_path)
+
+    return tmp_path
+
+
+@pytest.fixture
+def mock_dbt_project_dir_with_model_results(fixtures_dir: Path, tmp_path: Path) -> Path:
+    """Create a mock dbt project directory with model run results fixtures.
+
+    Similar to mock_dbt_project_dir but uses dbt_run_results.json which contains
+    model execution results (from `dbt run`) instead of test results.
+
+    This fixture is used for testing the `run` and `build` commands which
+    expect model execution results with timing information.
+
+    Args:
+        fixtures_dir: Path to fixtures directory with committed artifacts.
+        tmp_path: Pytest-provided temporary directory.
+
+    Returns:
+        Path to temporary project directory with proper structure.
+    """
+    manifest_path = fixtures_dir / "manifest.json"
+    run_results_path = fixtures_dir / "dbt_run_results.json"
+
+    if not manifest_path.exists():
+        pytest.skip(f"Fixture not found: {manifest_path}")
+    if not run_results_path.exists():
+        pytest.skip(f"Fixture not found: {run_results_path}")
+
+    # Create target directory structure
+    target_dir = tmp_path / "target"
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    # Symlink artifacts (faster than copying)
+    (target_dir / "manifest.json").symlink_to(manifest_path)
     (target_dir / "run_results.json").symlink_to(run_results_path)
 
     return tmp_path
