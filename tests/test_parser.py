@@ -25,7 +25,6 @@ import pytest
 
 from dbt_correlator.parser import (
     DatasetInfo,
-    DatasetLocation,
     Manifest,
     ModelExecutionResult,
     ModelLineage,
@@ -35,7 +34,6 @@ from dbt_correlator.parser import (
     build_dataset_info,
     build_namespace,
     extract_all_model_lineage,
-    extract_dataset_location,
     extract_model_inputs,
     extract_model_name,
     extract_model_results,
@@ -713,120 +711,6 @@ def test_get_model_name_from_test_ref_without_name() -> None:
     # Assert: Error message should mention name issue
     error_message = str(exc_info.value)
     assert "name" in error_message.lower(), "Error should mention missing name"
-
-
-@pytest.mark.unit
-def test_extract_dataset_location_valid() -> None:
-    """Test extracting database, schema, table from valid model node.
-
-    Validates:
-        - Correctly extracts all three fields
-        - Returns DatasetLocation with proper values
-    """
-    # Arrange: Valid model node
-    model_node = {"database": "jaffle_shop", "schema": "main", "name": "customers"}
-    model_unique_id = "model.jaffle_shop.customers"
-
-    # Act: Extract location
-    location = extract_dataset_location(model_node, model_unique_id)
-
-    # Assert: Should return DatasetLocation instance
-    assert isinstance(
-        location, DatasetLocation
-    ), "Should return DatasetLocation instance"
-
-    # Assert: Should have correct values
-    assert (
-        location.database == "jaffle_shop"
-    ), f"Expected 'jaffle_shop', got '{location.database}'"
-    assert location.schema == "main", f"Expected 'main', got '{location.schema}'"
-    assert (
-        location.table == "customers"
-    ), f"Expected 'customers', got '{location.table}'"
-
-
-@pytest.mark.unit
-def test_extract_dataset_location_with_alias() -> None:
-    """Test that alias is preferred over name when present.
-
-    Validates handling of dbt model alias feature.
-    """
-    # Arrange: Model node with alias
-    model_node = {
-        "database": "analytics",
-        "schema": "dbt_prod",
-        "name": "stg_customers",
-        "alias": "customers",  # Alias overrides name
-    }
-    model_unique_id = "model.my_project.stg_customers"
-
-    # Act: Extract location
-    location = extract_dataset_location(model_node, model_unique_id)
-
-    # Assert: Should use alias instead of name
-    assert (
-        location.table == "customers"
-    ), f"Should use alias 'customers', got '{location.table}'"
-
-
-@pytest.mark.unit
-def test_extract_dataset_location_missing_database() -> None:
-    """Test error handling when database field is missing.
-
-    Validates that:
-        - KeyError is raised
-        - Error message is helpful
-    """
-    # Arrange: Model node missing database
-    model_node = {"schema": "main", "name": "customers"}  # Missing database
-    model_unique_id = "model.jaffle_shop.customers"
-
-    # Act & Assert: Should raise KeyError
-    with pytest.raises(KeyError) as exc_info:
-        extract_dataset_location(model_node, model_unique_id)
-
-    # Assert: Error message should mention missing fields
-    error_message = str(exc_info.value)
-    assert len(error_message) > 0, "Error message should not be empty"
-    assert model_unique_id in error_message, "Error should include model ID"
-
-
-@pytest.mark.unit
-def test_extract_dataset_location_missing_schema() -> None:
-    """Test error handling when schema field is missing.
-
-    Validates proper error handling for incomplete model nodes.
-    """
-    # Arrange: Model node missing schema
-    model_node = {"database": "jaffle_shop", "name": "customers"}  # Missing schema
-    model_unique_id = "model.jaffle_shop.customers"
-
-    # Act & Assert: Should raise KeyError
-    with pytest.raises(KeyError) as exc_info:
-        extract_dataset_location(model_node, model_unique_id)
-
-    # Assert: Error message should be helpful
-    error_message = str(exc_info.value)
-    assert len(error_message) > 0, "Error message should not be empty"
-
-
-@pytest.mark.unit
-def test_extract_dataset_location_missing_name_and_alias() -> None:
-    """Test error handling when both name and alias are missing.
-
-    Validates edge case handling.
-    """
-    # Arrange: Model node missing both name and alias
-    model_node = {"database": "jaffle_shop", "schema": "main"}  # Missing name
-    model_unique_id = "model.jaffle_shop.unknown"
-
-    # Act & Assert: Should raise KeyError
-    with pytest.raises(KeyError) as exc_info:
-        extract_dataset_location(model_node, model_unique_id)
-
-    # Assert: Error message should be helpful
-    error_message = str(exc_info.value)
-    assert len(error_message) > 0, "Error message should not be empty"
 
 
 @pytest.mark.unit

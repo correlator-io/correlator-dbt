@@ -158,21 +158,6 @@ class ModelExecutionResult:
 
 
 @dataclass
-class DatasetLocation:
-    """Dataset location components extracted from model node.
-
-    Attributes:
-        database: Database name (e.g., jaffle_shop, analytics)
-        schema: Schema name (e.g., main, dbt_prod, public)
-        table: Table name (e.g., customers, orders)
-    """
-
-    database: str
-    schema: str
-    table: str
-
-
-@dataclass
 class Manifest:
     """Parsed dbt manifest.json file.
 
@@ -460,44 +445,6 @@ def resolve_test_to_model_node(
         raise KeyError(
             f"Model node not found in manifest: {model_unique_id}. "
             f"Referenced by test: {test_unique_id}"
-        ) from e
-
-
-def extract_dataset_location(
-    model_node: dict[str, Any], model_unique_id: str
-) -> DatasetLocation:
-    """Extract database, schema, table from model node.
-
-    Args:
-        model_node: Model node dictionary from manifest.
-        model_unique_id: Model unique_id for error messages.
-
-    Returns:
-        DatasetLocation with database, schema, and table components.
-
-    Raises:
-        KeyError: If required fields are missing.
-
-    Example:
-        >>> model = {"database": "analytics", "schema": "dbt_prod", "name": "customers"}
-        >>> location = extract_dataset_location(model, "model.proj.customers")
-        >>> location.database
-        'analytics'
-        >>> location.schema
-        'dbt_prod'
-        >>> location.table
-        'customers'
-    """
-    try:
-        database = model_node["database"]
-        schema = model_node["schema"]
-        # Table name can be 'alias' or 'name'
-        table = model_node.get("alias") or model_node["name"]
-        return DatasetLocation(database=database, schema=schema, table=table)
-    except KeyError as e:
-        raise KeyError(
-            f"Model node missing required fields (database, schema, name): {model_unique_id}. "
-            f"Error: {e}"
         ) from e
 
 
