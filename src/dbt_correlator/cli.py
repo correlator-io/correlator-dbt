@@ -23,9 +23,10 @@ import os
 import subprocess
 import sys
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import click
 
@@ -52,6 +53,159 @@ from .parser import (
     parse_manifest,
     parse_run_results,
 )
+
+# =============================================================================
+# Unified Workflow Configuration and Execution
+# =============================================================================
+
+
+@dataclass
+class WorkflowConfig:
+    """Configuration for unified dbt workflow execution.
+
+    This dataclass encapsulates all parameters needed to execute a dbt workflow
+    and emit OpenLineage events. It enables a single unified workflow function
+    to handle test, run, and build commands.
+
+    OpenLineage Naming Conventions:
+        **Job** (the dbt command execution):
+            - namespace: User-provided via `job_namespace` (e.g., "dbt")
+            - name: Derived as "{project_name}.{command}" or user-provided
+
+        **Dataset** (the tables/views being read/written):
+            - namespace: Derived from manifest as "{adapter}://{database}",
+                         OR user-provided via `dataset_namespace`
+            - name: Derived from node as "{schema}.{table}"
+
+    Attributes:
+        command: The dbt command to execute ("test", "run", or "build").
+        project_dir: Path to dbt project directory.
+        profiles_dir: Path to dbt profiles directory.
+        endpoint: OpenLineage API endpoint URL.
+        job_namespace: OpenLineage job namespace (e.g., "dbt", "dbt-prod").
+        job_name: Optional job name override. If None, derived from manifest.
+        api_key: Optional API key for authentication.
+        dataset_namespace: Optional dataset namespace override for strict OL compliance.
+        skip_dbt_run: If True, skip dbt execution and use existing artifacts.
+        dbt_args: Additional arguments to pass to dbt command.
+        emit_test_events: Whether to emit dataQualityAssertions events.
+        include_runtime_metrics: Whether to include outputStatistics facet.
+    """
+
+    command: Literal["test", "run", "build"]
+    project_dir: str
+    profiles_dir: str
+    endpoint: str
+    job_namespace: str
+    job_name: Optional[str] = None
+    api_key: Optional[str] = None
+    dataset_namespace: Optional[str] = None
+    skip_dbt_run: bool = False
+    dbt_args: tuple[str, ...] = ()
+
+    # Workflow-specific flags derived from command type
+    emit_test_events: bool = False
+    include_runtime_metrics: bool = False
+
+    @classmethod
+    def for_test(
+        cls,
+        project_dir: str,
+        profiles_dir: str,
+        endpoint: str,
+        job_namespace: str,
+        job_name: Optional[str] = None,
+        api_key: Optional[str] = None,
+        dataset_namespace: Optional[str] = None,
+        skip_dbt_run: bool = False,
+        dbt_args: tuple[str, ...] = (),
+    ) -> "WorkflowConfig":
+        """Create configuration for dbt test workflow.
+
+        Test workflow: emits test events, no runtime metrics.
+        Uses get_models_with_tests() to filter models.
+        """
+        return cls(
+            command="test",
+            project_dir=project_dir,
+            profiles_dir=profiles_dir,
+            endpoint=endpoint,
+            job_namespace=job_namespace,
+            job_name=job_name,
+            api_key=api_key,
+            dataset_namespace=dataset_namespace,
+            skip_dbt_run=skip_dbt_run,
+            dbt_args=dbt_args,
+            emit_test_events=True,
+            include_runtime_metrics=False,
+        )
+
+    @classmethod
+    def for_run(
+        cls,
+        project_dir: str,
+        profiles_dir: str,
+        endpoint: str,
+        job_namespace: str,
+        job_name: Optional[str] = None,
+        api_key: Optional[str] = None,
+        dataset_namespace: Optional[str] = None,
+        skip_dbt_run: bool = False,
+        dbt_args: tuple[str, ...] = (),
+    ) -> "WorkflowConfig":
+        """Create configuration for dbt run workflow.
+
+        Run workflow: emits runtime metrics, no test events.
+        Uses get_executed_models() to filter models.
+        """
+        return cls(
+            command="run",
+            project_dir=project_dir,
+            profiles_dir=profiles_dir,
+            endpoint=endpoint,
+            job_namespace=job_namespace,
+            job_name=job_name,
+            api_key=api_key,
+            dataset_namespace=dataset_namespace,
+            skip_dbt_run=skip_dbt_run,
+            dbt_args=dbt_args,
+            emit_test_events=False,
+            include_runtime_metrics=True,
+        )
+
+    @classmethod
+    def for_build(
+        cls,
+        project_dir: str,
+        profiles_dir: str,
+        endpoint: str,
+        job_namespace: str,
+        job_name: Optional[str] = None,
+        api_key: Optional[str] = None,
+        dataset_namespace: Optional[str] = None,
+        skip_dbt_run: bool = False,
+        dbt_args: tuple[str, ...] = (),
+    ) -> "WorkflowConfig":
+        """Create configuration for dbt build workflow.
+
+        Build workflow: emits both test events AND runtime metrics.
+        Uses get_executed_models() to filter models.
+        Single runId shared across all events for better correlation.
+        """
+        return cls(
+            command="build",
+            project_dir=project_dir,
+            profiles_dir=profiles_dir,
+            endpoint=endpoint,
+            job_namespace=job_namespace,
+            job_name=job_name,
+            api_key=api_key,
+            dataset_namespace=dataset_namespace,
+            skip_dbt_run=skip_dbt_run,
+            dbt_args=dbt_args,
+            emit_test_events=True,
+            include_runtime_metrics=True,
+        )
 
 
 def load_config_callback(
@@ -132,6 +286,186 @@ def get_api_key_with_fallback() -> Optional[str]:
     return os.environ.get("CORRELATOR_API_KEY") or os.environ.get("OPENLINEAGE_API_KEY")
 
 
+def resolve_credentials(
+    endpoint: Optional[str],
+    api_key: Optional[str],
+) -> tuple[str, Optional[str]]:
+    """Resolve endpoint and API key with dbt-ol compatible fallbacks.
+
+    Applies environment variable fallbacks and validates that endpoint is set.
+    This consolidates the credential resolution logic used by all CLI commands.
+
+    Priority for endpoint: CLI arg > CORRELATOR_ENDPOINT > OPENLINEAGE_URL
+    Priority for API key: CLI arg > CORRELATOR_API_KEY > OPENLINEAGE_API_KEY
+
+    Args:
+        endpoint: Endpoint from CLI option (may be None).
+        api_key: API key from CLI option (may be None).
+
+    Returns:
+        Tuple of (resolved_endpoint, resolved_api_key).
+
+    Raises:
+        click.UsageError: If endpoint cannot be resolved from any source.
+
+    Example:
+        >>> endpoint, api_key = resolve_credentials(None, None)
+        # Uses CORRELATOR_ENDPOINT or OPENLINEAGE_URL from environment
+    """
+    resolved_endpoint = endpoint or get_endpoint_with_fallback()
+    if not resolved_endpoint:
+        raise click.UsageError(
+            "Missing --correlator-endpoint. "
+            "Set via CLI, CORRELATOR_ENDPOINT, or OPENLINEAGE_URL env var."
+        )
+
+    resolved_api_key = api_key or get_api_key_with_fallback()
+    return resolved_endpoint, resolved_api_key
+
+
+def execute_workflow(config: WorkflowConfig) -> int:  # noqa: PLR0912, PLR0915
+    """Execute unified dbt workflow with OpenLineage event emission.
+
+    This is the main workflow function that handles test, run, and build
+    commands. It consolidates the common workflow logic:
+
+    1. Parses manifest for job name (if not provided)
+    2. Emits START wrapping event immediately
+    3. Runs dbt command (unless skip_dbt_run)
+    4. Parses dbt artifacts
+    5. Extracts model lineage (filtered by command type)
+    6. Optionally extracts runtime metrics (run/build only)
+    7. Constructs lineage events
+    8. Optionally constructs test events (test/build only)
+    9. Creates terminal event (COMPLETE/FAIL)
+    10. Batch emits all events to OpenLineage backend
+    11. Returns dbt exit code
+
+    Args:
+        config: WorkflowConfig with all workflow parameters.
+
+    Returns:
+        Exit code from dbt command (0=success, 1=test failures/error, 2=compile error).
+        Returns 127 if dbt executable not found.
+        If skip_dbt_run, returns 0 unless artifact parsing fails.
+
+    Note:
+        Emission failures are logged as warnings but don't affect the exit code.
+        This ensures lineage is "fire-and-forget" - dbt execution is primary.
+    """
+    run_id = str(uuid.uuid4())
+    dbt_exit_code = 0
+    manifest = None  # Will be parsed once and reused
+
+    # 1. Resolve job name (parse manifest if needed)
+    job_name = config.job_name
+    if not job_name:
+        try:
+            manifest = parse_manifest(str(get_manifest_path(config.project_dir)))
+            job_name = get_default_job_name(manifest, config.command)
+        except FileNotFoundError:
+            job_name = f"dbt.{config.command}"  # Fallback if no manifest yet
+
+    # 2. Create and emit START event immediately
+    start_timestamp = datetime.now(timezone.utc)
+    start_event = create_wrapping_event(
+        "START", run_id, job_name, config.job_namespace, start_timestamp
+    )
+    try:
+        emit_events([start_event], config.endpoint, config.api_key)
+    except (ConnectionError, TimeoutError, ValueError) as e:
+        click.echo(f"Warning: Failed to emit START event: {e}", err=True)
+
+    # 3. Run dbt command (unless skip)
+    if not config.skip_dbt_run:
+        try:
+            result = run_dbt_command(
+                config.command, config.project_dir, config.profiles_dir, config.dbt_args
+            )
+            dbt_exit_code = result.returncode
+        except FileNotFoundError:
+            click.echo(
+                "Error: dbt executable not found. Please install dbt-core.",
+                err=True,
+            )
+            return 127  # Command not found exit code
+
+    # 4. Parse dbt artifacts (reuse manifest if already parsed for job_name)
+    try:
+        run_results = parse_run_results(str(get_run_results_path(config.project_dir)))
+        if manifest is None:
+            manifest = parse_manifest(str(get_manifest_path(config.project_dir)))
+    except FileNotFoundError as e:
+        click.echo(f"Error: {e}", err=True)
+        return 1
+
+    # 5. Determine which models to emit lineage for
+    # test command: only models that have tests executed
+    # run/build commands: only models that were executed
+    if config.command == "test":
+        model_ids = get_models_with_tests(run_results, manifest)
+    else:
+        model_ids = get_executed_models(run_results)
+
+    # 6. Extract model lineage for filtered models
+    model_lineages = extract_all_model_lineage(
+        manifest,
+        model_ids=model_ids,
+        namespace_override=config.dataset_namespace,
+    )
+
+    # 7. Extract runtime metrics (only for run/build commands)
+    execution_results = None
+    if config.include_runtime_metrics:
+        execution_results = extract_model_results(run_results)
+
+    # 8. Construct lineage events
+    event_time = datetime.now(timezone.utc).isoformat()
+    lineage_events = construct_lineage_events(
+        model_lineages=model_lineages,
+        run_id=run_id,
+        job_namespace=config.job_namespace,
+        producer=PRODUCER,
+        event_time=event_time,
+        execution_results=execution_results,
+    )
+
+    # 9. Construct test events (only for test/build commands)
+    test_events: list[Any] = []
+    if config.emit_test_events:
+        test_events = construct_test_events(
+            run_results=run_results,
+            manifest=manifest,
+            job_namespace=config.job_namespace,
+            job_name=job_name,
+            run_id=run_id,
+        )
+
+    # 10. Create terminal event (COMPLETE or FAIL)
+    terminal_timestamp = datetime.now(timezone.utc)
+    terminal_type = "COMPLETE" if dbt_exit_code == 0 else "FAIL"
+    terminal_event = create_wrapping_event(
+        terminal_type, run_id, job_name, config.job_namespace, terminal_timestamp
+    )
+
+    # 11. Batch emit all events: lineage + tests (if any) + terminal
+    all_events = [*lineage_events, *test_events, terminal_event]
+
+    try:
+        emit_events(all_events, config.endpoint, config.api_key)
+        # Build success message based on what was emitted
+        parts = [f"{len(lineage_events)} lineage events"]
+        if test_events:
+            parts.append(f"{len(test_events)} test events")
+        parts.append("terminal event")
+        click.echo(f"Emitted {' + '.join(parts)} ({len(model_ids)} models)")
+    except (ConnectionError, TimeoutError, ValueError) as e:
+        click.echo(f"Warning: Failed to emit events: {e}", err=True)
+        # Don't fail - lineage is fire-and-forget
+
+    return dbt_exit_code
+
+
 def run_dbt_command(
     command: str,
     project_dir: str,
@@ -210,143 +544,6 @@ def get_default_job_name(manifest: Any, command: str) -> str:
     """
     project_name = manifest.metadata.get("project_name", "dbt")
     return f"{project_name}.{command}"
-
-
-def execute_test_workflow(
-    project_dir: str,
-    profiles_dir: str,
-    correlator_endpoint: str,
-    namespace: str,
-    job_name: Optional[str],
-    api_key: Optional[str],
-    dataset_namespace: Optional[str],
-    skip_dbt_run: bool,
-    dbt_args: tuple[str, ...],
-) -> int:
-    """Execute complete test workflow with OpenLineage event emission.
-
-    This is the main workflow function that:
-    1. Parses manifest for job name (if not provided)
-    2. Emits START wrapping event immediately
-    3. Runs dbt test (unless skip_dbt_run)
-    4. Parses dbt artifacts
-    5. Extracts static lineage for models with tests
-    6. Constructs test events with dataQualityAssertions
-    7. Creates terminal event (COMPLETE/FAIL)
-    8. Batch emits lineage + test events to OpenLineage backend
-    9. Returns dbt exit code
-
-    Args:
-        project_dir: Path to dbt project directory.
-        profiles_dir: Path to dbt profiles directory.
-        correlator_endpoint: OpenLineage API endpoint URL.
-        namespace: OpenLineage job namespace (e.g., "dbt").
-        job_name: Job name for OpenLineage events. If None, uses
-            {project_name}.test format (dbt-ol compatible).
-        api_key: Optional API key for authentication.
-        dataset_namespace: Optional dataset namespace override for strict OL compliance.
-        skip_dbt_run: If True, skip dbt execution and use existing artifacts.
-        dbt_args: Additional arguments to pass to dbt test.
-
-    Returns:
-        Exit code from dbt test (0=success, 1=test failures, 2=error).
-        If skip_dbt_run, returns 0 unless artifact parsing fails.
-
-    Note:
-        Emission failures are logged as warnings but don't affect the exit code.
-        This ensures lineage is "fire-and-forget" - dbt execution is primary.
-    """
-    run_id = str(uuid.uuid4())
-    dbt_exit_code = 0
-    manifest = None  # Will be parsed once and reused
-
-    # 1. Parse manifest for job name if not provided
-    # Manifest should exist from previous dbt commands (compile, run, etc.)
-    if not job_name:
-        try:
-            manifest = parse_manifest(str(get_manifest_path(project_dir)))
-            job_name = get_default_job_name(manifest, "test")
-        except FileNotFoundError:
-            job_name = "dbt.test"  # Fallback if no manifest yet
-
-    # 2. Create and emit START event immediately (aligned with run/build)
-    start_timestamp = datetime.now(timezone.utc)
-    start_event = create_wrapping_event(
-        "START", run_id, job_name, namespace, start_timestamp
-    )
-    try:
-        emit_events([start_event], correlator_endpoint, api_key)
-    except (ConnectionError, TimeoutError, ValueError) as e:
-        click.echo(f"Warning: Failed to emit START event: {e}", err=True)
-
-    # 3. Run dbt test (unless skip)
-    if not skip_dbt_run:
-        try:
-            result = run_dbt_command("test", project_dir, profiles_dir, dbt_args)
-            dbt_exit_code = result.returncode
-        except FileNotFoundError:
-            click.echo(
-                "Error: dbt executable not found. Please install dbt-core.",
-                err=True,
-            )
-            return 127  # Command not found exit code
-
-    # 4. Parse dbt artifacts (reuse manifest if already parsed for job_name)
-    try:
-        run_results = parse_run_results(str(get_run_results_path(project_dir)))
-        if manifest is None:
-            manifest = parse_manifest(str(get_manifest_path(project_dir)))
-    except FileNotFoundError as e:
-        click.echo(f"Error: {e}", err=True)
-        return 1
-
-    # 5. Get models with executed tests (handles --select filtering)
-    models_with_tests = get_models_with_tests(run_results, manifest)
-
-    # 6. Extract static lineage ONLY for models with executed tests
-    model_lineages = extract_all_model_lineage(
-        manifest,
-        model_ids=models_with_tests,
-        namespace_override=dataset_namespace,
-    )
-
-    # 7. Construct lineage events (no runtime metrics for test command)
-    event_time = datetime.now(timezone.utc).isoformat()
-    lineage_events = construct_lineage_events(
-        model_lineages=model_lineages,
-        run_id=run_id,
-        job_namespace=namespace,
-        producer=PRODUCER,
-        event_time=event_time,
-        execution_results=None,  # No runtime metrics from dbt test
-    )
-
-    # 8. Construct test events with dataQualityAssertions
-    test_events = construct_test_events(
-        run_results, manifest, namespace, job_name, run_id
-    )
-
-    # 9. Create terminal event (COMPLETE or FAIL)
-    terminal_timestamp = datetime.now(timezone.utc)
-    terminal_type = "COMPLETE" if dbt_exit_code == 0 else "FAIL"
-    terminal_event = create_wrapping_event(
-        terminal_type, run_id, job_name, namespace, terminal_timestamp
-    )
-
-    # 10. Batch emit lineage + test + terminal events
-    all_events = [*lineage_events, *test_events, terminal_event]
-
-    try:
-        emit_events(all_events, correlator_endpoint, api_key)
-        click.echo(
-            f"Emitted {len(lineage_events)} lineage events + "
-            f"{len(test_events)} test events + terminal event"
-        )
-    except (ConnectionError, TimeoutError, ValueError) as e:
-        click.echo(f"Warning: Failed to emit events: {e}", err=True)
-        # Don't fail - lineage is fire-and-forget
-
-    return dbt_exit_code
 
 
 @click.group()
@@ -464,165 +661,21 @@ def test(
         $ export OPENLINEAGE_NAMESPACE=production
         $ dbt-correlator test
     """
-    # Use helper functions for dbt-ol compatible env var fallbacks
-    if not correlator_endpoint:
-        correlator_endpoint = get_endpoint_with_fallback()
-    if not correlator_endpoint:
-        raise click.UsageError(
-            "Missing --correlator-endpoint. "
-            "Set via CLI, CORRELATOR_ENDPOINT, or OPENLINEAGE_URL env var."
-        )
+    # Resolve credentials with dbt-ol compatible env var fallbacks
+    endpoint, api_key = resolve_credentials(correlator_endpoint, correlator_api_key)
 
-    if not correlator_api_key:
-        correlator_api_key = get_api_key_with_fallback()
-
-    exit_code = execute_test_workflow(
+    config = WorkflowConfig.for_test(
         project_dir=project_dir,
         profiles_dir=profiles_dir,
-        correlator_endpoint=correlator_endpoint,
-        namespace=openlineage_namespace,
+        endpoint=endpoint,
+        job_namespace=openlineage_namespace,
         job_name=job_name,
-        api_key=correlator_api_key,
+        api_key=api_key,
         dataset_namespace=dataset_namespace,
         skip_dbt_run=skip_dbt_run,
         dbt_args=dbt_args,
     )
-    sys.exit(exit_code)
-
-
-def execute_run_workflow(
-    project_dir: str,
-    profiles_dir: str,
-    correlator_endpoint: str,
-    namespace: str,
-    job_name: Optional[str],
-    api_key: Optional[str],
-    dataset_namespace: Optional[str],
-    skip_dbt_run: bool,
-    dbt_args: tuple[str, ...],
-) -> int:
-    """Execute complete run workflow with lineage emission.
-
-    This is the main workflow function for `dbt run` that:
-    1. Parses manifest for job name (if not provided)
-    2. Creates START wrapping event
-    3. Runs dbt run (unless skip_dbt_run)
-    4. Parses dbt artifacts
-    5. Extracts model lineage with runtime metrics
-    6. Creates terminal event (COMPLETE/FAIL)
-    7. Batch emits all events to OpenLineage backend
-    8. Returns dbt exit code
-
-    Args:
-        project_dir: Path to dbt project directory.
-        profiles_dir: Path to dbt profiles directory.
-        correlator_endpoint: OpenLineage API endpoint URL.
-        namespace: OpenLineage namespace (e.g., "dbt").
-        job_name: Job name for OpenLineage events. If None, uses
-            {project_name}.run format (dbt-ol compatible).
-        api_key: Optional API key for authentication.
-        dataset_namespace: Optional namespace override for datasets.
-        skip_dbt_run: If True, skip dbt execution and use existing artifacts.
-        dbt_args: Additional arguments to pass to dbt run.
-
-    Returns:
-        Exit code from dbt run (0=success, 1=error).
-        If skip_dbt_run, returns 0 unless artifact parsing fails.
-
-    Note:
-        Emission failures are logged as warnings but don't affect the exit code.
-        This ensures lineage is "fire-and-forget" - dbt execution is primary.
-    """
-    run_id = str(uuid.uuid4())
-    dbt_exit_code = 0
-    manifest = None  # Will be parsed once and reused
-
-    # 1. Parse manifest for job name if not provided
-    if not job_name:
-        try:
-            manifest = parse_manifest(str(get_manifest_path(project_dir)))
-            job_name = get_default_job_name(manifest, "run")
-        except FileNotFoundError:
-            job_name = "dbt.run"  # Fallback if no manifest yet
-
-    # 2. Create START event
-    start_timestamp = datetime.now(timezone.utc)
-    start_event = create_wrapping_event(
-        "START", run_id, job_name, namespace, start_timestamp
-    )
-
-    # Emit START event immediately
-    try:
-        emit_events([start_event], correlator_endpoint, api_key)
-    except (ConnectionError, TimeoutError, ValueError) as e:
-        click.echo(f"Warning: Failed to emit START event: {e}", err=True)
-
-    # 3. Run dbt run (unless skip)
-    if not skip_dbt_run:
-        try:
-            result = run_dbt_command("run", project_dir, profiles_dir, dbt_args)
-            dbt_exit_code = result.returncode
-        except FileNotFoundError:
-            click.echo(
-                "Error: dbt executable not found. Please install dbt-core.",
-                err=True,
-            )
-            return 127  # Command not found exit code
-
-    # 4. Parse dbt artifacts (reuse manifest if already parsed for job_name)
-    try:
-        run_results = parse_run_results(str(get_run_results_path(project_dir)))
-        if manifest is None:
-            manifest = parse_manifest(str(get_manifest_path(project_dir)))
-    except FileNotFoundError as e:
-        click.echo(f"Error: {e}", err=True)
-        return 1
-
-    # 5. Get executed models from run_results (handles --select filtering)
-    executed_models = get_executed_models(run_results)
-
-    # 5. Extract lineage ONLY for executed models
-    model_lineages = extract_all_model_lineage(
-        manifest,
-        model_ids=executed_models,
-        namespace_override=dataset_namespace,
-    )
-
-    # 6. Extract runtime metrics from run results
-    execution_results = extract_model_results(run_results)
-
-    # 7. Construct lineage events with runtime metrics
-    event_time = datetime.now(timezone.utc).isoformat()
-    lineage_events = construct_lineage_events(
-        model_lineages=model_lineages,
-        run_id=run_id,
-        job_namespace=namespace,
-        producer=PRODUCER,
-        event_time=event_time,
-        execution_results=execution_results,
-    )
-
-    # 8. Create terminal event (COMPLETE or FAIL)
-    terminal_timestamp = datetime.now(timezone.utc)
-    terminal_type = "COMPLETE" if dbt_exit_code == 0 else "FAIL"
-    terminal_event = create_wrapping_event(
-        terminal_type, run_id, job_name, namespace, terminal_timestamp
-    )
-
-    # 9. Batch emit lineage + terminal events
-    all_events = [*lineage_events, terminal_event]
-
-    try:
-        emit_events(all_events, correlator_endpoint, api_key)
-        click.echo(
-            f"Emitted {len(lineage_events)} lineage events + terminal event "
-            f"({len(executed_models)} models)"
-        )
-    except (ConnectionError, TimeoutError, ValueError) as e:
-        click.echo(f"Warning: Failed to emit events: {e}", err=True)
-        # Don't fail - lineage is fire-and-forget
-
-    return dbt_exit_code
+    sys.exit(execute_workflow(config))
 
 
 @cli.command()
@@ -726,182 +779,21 @@ def run(
         # Use custom dataset namespace for strict OpenLineage compliance
         $ dbt-correlator run --dataset-namespace postgresql://localhost:5432/mydb
     """
-    # Use helper functions for dbt-ol compatible env var fallbacks
-    if not correlator_endpoint:
-        correlator_endpoint = get_endpoint_with_fallback()
-    if not correlator_endpoint:
-        raise click.UsageError(
-            "Missing --correlator-endpoint. "
-            "Set via CLI, CORRELATOR_ENDPOINT, or OPENLINEAGE_URL env var."
-        )
+    # Resolve credentials with dbt-ol compatible env var fallbacks
+    endpoint, api_key = resolve_credentials(correlator_endpoint, correlator_api_key)
 
-    if not correlator_api_key:
-        correlator_api_key = get_api_key_with_fallback()
-
-    exit_code = execute_run_workflow(
+    config = WorkflowConfig.for_run(
         project_dir=project_dir,
         profiles_dir=profiles_dir,
-        correlator_endpoint=correlator_endpoint,
-        namespace=openlineage_namespace,
+        endpoint=endpoint,
+        job_namespace=openlineage_namespace,
         job_name=job_name,
-        api_key=correlator_api_key,
+        api_key=api_key,
         dataset_namespace=dataset_namespace,
         skip_dbt_run=skip_dbt_run,
         dbt_args=dbt_args,
     )
-    sys.exit(exit_code)
-
-
-def execute_build_workflow(
-    project_dir: str,
-    profiles_dir: str,
-    correlator_endpoint: str,
-    namespace: str,
-    job_name: Optional[str],
-    api_key: Optional[str],
-    dataset_namespace: Optional[str],
-    skip_dbt_run: bool,
-    dbt_args: tuple[str, ...],
-) -> int:
-    """Execute complete build workflow with lineage + test result emission.
-
-    This is the main workflow function for `dbt build` that:
-    1. Parses manifest for job name (if not provided)
-    2. Creates START wrapping event
-    3. Runs dbt build (unless skip_dbt_run)
-    4. Parses dbt artifacts
-    5. Extracts model lineage with runtime metrics
-    6. Extracts test results with dataQualityAssertions
-    7. Creates terminal event (COMPLETE/FAIL)
-    8. Batch emits all events to OpenLineage backend
-    9. Returns dbt exit code
-
-    The key difference from running `run` + `test` separately is that all
-    events share a single runId, enabling better correlation in the backend.
-
-    Args:
-        project_dir: Path to dbt project directory.
-        profiles_dir: Path to dbt profiles directory.
-        correlator_endpoint: OpenLineage API endpoint URL.
-        namespace: OpenLineage namespace (e.g., "dbt").
-        job_name: Job name for OpenLineage events. If None, uses
-            {project_name}.build format (dbt-ol compatible).
-        api_key: Optional API key for authentication.
-        dataset_namespace: Optional namespace override for datasets.
-        skip_dbt_run: If True, skip dbt execution and use existing artifacts.
-        dbt_args: Additional arguments to pass to dbt build.
-
-    Returns:
-        Exit code from dbt build (0=success, 1=test failures, 2=error).
-        If skip_dbt_run, returns 0 unless artifact parsing fails.
-
-    Note:
-        Emission failures are logged as warnings but don't affect the exit code.
-        This ensures lineage is "fire-and-forget" - dbt execution is primary.
-    """
-    run_id = str(uuid.uuid4())
-    dbt_exit_code = 0
-    manifest = None  # Will be parsed once and reused
-
-    # 1. Parse manifest for job name if not provided
-    if not job_name:
-        try:
-            manifest = parse_manifest(str(get_manifest_path(project_dir)))
-            job_name = get_default_job_name(manifest, "build")
-        except FileNotFoundError:
-            job_name = "dbt.build"  # Fallback if no manifest yet
-
-    # 2. Create START event
-    start_timestamp = datetime.now(timezone.utc)
-    start_event = create_wrapping_event(
-        "START", run_id, job_name, namespace, start_timestamp
-    )
-
-    # Emit START event immediately
-    try:
-        emit_events([start_event], correlator_endpoint, api_key)
-    except (ConnectionError, TimeoutError, ValueError) as e:
-        click.echo(f"Warning: Failed to emit START event: {e}", err=True)
-
-    # 3. Run dbt build (unless skip)
-    if not skip_dbt_run:
-        try:
-            result = run_dbt_command("build", project_dir, profiles_dir, dbt_args)
-            dbt_exit_code = result.returncode
-        except FileNotFoundError:
-            click.echo(
-                "Error: dbt executable not found. Please install dbt-core.",
-                err=True,
-            )
-            return 127  # Command not found exit code
-
-    # 4. Parse dbt artifacts (reuse manifest if already parsed for job_name)
-    try:
-        run_results = parse_run_results(str(get_run_results_path(project_dir)))
-        if manifest is None:
-            manifest = parse_manifest(str(get_manifest_path(project_dir)))
-    except FileNotFoundError as e:
-        click.echo(f"Error: {e}", err=True)
-        return 1
-
-    # 5. Get executed models from run_results (handles --select filtering)
-    executed_models = get_executed_models(run_results)
-
-    # 5. Extract lineage ONLY for executed models
-    model_lineages = extract_all_model_lineage(
-        manifest,
-        model_ids=executed_models,
-        namespace_override=dataset_namespace,
-    )
-
-    # 6. Extract runtime metrics from run results
-    execution_results = extract_model_results(run_results)
-
-    # 7. Construct lineage events with runtime metrics
-    event_time = datetime.now(timezone.utc).isoformat()
-    lineage_events = construct_lineage_events(
-        model_lineages=model_lineages,
-        run_id=run_id,
-        job_namespace=namespace,
-        producer=PRODUCER,
-        event_time=event_time,
-        execution_results=execution_results,
-    )
-
-    # 8. Construct test events with dataQualityAssertions
-    test_events = construct_test_events(
-        run_results=run_results,
-        manifest=manifest,
-        job_namespace=namespace,
-        job_name=job_name,
-        run_id=run_id,
-    )
-    # Remove wrapping events from test_events (we'll add our own terminal event)
-    # construct_events returns [test_event] (single event, no wrapping)
-    # So we can use them directly
-
-    # 9. Create terminal event (COMPLETE or FAIL)
-    terminal_timestamp = datetime.now(timezone.utc)
-    terminal_type = "COMPLETE" if dbt_exit_code == 0 else "FAIL"
-    terminal_event = create_wrapping_event(
-        terminal_type, run_id, job_name, namespace, terminal_timestamp
-    )
-
-    # 10. Batch emit all events: lineage + tests + terminal
-    all_events = [*lineage_events, *test_events, terminal_event]
-
-    try:
-        emit_events(all_events, correlator_endpoint, api_key)
-        click.echo(
-            f"Emitted {len(lineage_events)} lineage events + "
-            f"{len(test_events)} test events + terminal event "
-            f"({len(executed_models)} models)"
-        )
-    except (ConnectionError, TimeoutError, ValueError) as e:
-        click.echo(f"Warning: Failed to emit events: {e}", err=True)
-        # Don't fail - lineage is fire-and-forget
-
-    return dbt_exit_code
+    sys.exit(execute_workflow(config))
 
 
 @cli.command()
@@ -1009,30 +901,21 @@ def build(
         # Use custom dataset namespace for strict OpenLineage compliance
         $ dbt-correlator build --dataset-namespace postgresql://localhost:5432/mydb
     """
-    # Use helper functions for dbt-ol compatible env var fallbacks
-    if not correlator_endpoint:
-        correlator_endpoint = get_endpoint_with_fallback()
-    if not correlator_endpoint:
-        raise click.UsageError(
-            "Missing --correlator-endpoint. "
-            "Set via CLI, CORRELATOR_ENDPOINT, or OPENLINEAGE_URL env var."
-        )
+    # Resolve credentials with dbt-ol compatible env var fallbacks
+    endpoint, api_key = resolve_credentials(correlator_endpoint, correlator_api_key)
 
-    if not correlator_api_key:
-        correlator_api_key = get_api_key_with_fallback()
-
-    exit_code = execute_build_workflow(
+    config = WorkflowConfig.for_build(
         project_dir=project_dir,
         profiles_dir=profiles_dir,
-        correlator_endpoint=correlator_endpoint,
-        namespace=openlineage_namespace,
+        endpoint=endpoint,
+        job_namespace=openlineage_namespace,
         job_name=job_name,
-        api_key=correlator_api_key,
+        api_key=api_key,
         dataset_namespace=dataset_namespace,
         skip_dbt_run=skip_dbt_run,
         dbt_args=dbt_args,
     )
-    sys.exit(exit_code)
+    sys.exit(execute_workflow(config))
 
 
 if __name__ == "__main__":

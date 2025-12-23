@@ -401,9 +401,9 @@ class TestEventGeneration:
         )
 
         cli_mocks["construct"].assert_called_once()
-        call_args = cli_mocks["construct"].call_args
-        assert call_args[0][0] == cli_mocks["run_results"]
-        assert call_args[0][1] == cli_mocks["manifest"]
+        call_kwargs = cli_mocks["construct"].call_args[1]
+        assert call_kwargs["run_results"] == cli_mocks["run_results"]
+        assert call_kwargs["manifest"] == cli_mocks["manifest"]
 
 
 # =============================================================================
