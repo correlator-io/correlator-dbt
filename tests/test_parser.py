@@ -6,7 +6,8 @@ and manifest.json) and extracting dataset information for OpenLineage events.
 Test Coverage:
     - parse_run_results(): Parse run_results.json file
     - parse_manifest(): Parse manifest.json file
-    - extract_dataset_info(): Resolve dataset from test node
+    - resolve_test_to_model_node(): Resolve test to model node
+    - build_dataset_info(): Build dataset info from model node
     - map_test_status(): Map dbt status to boolean
 
 """
@@ -37,7 +38,6 @@ from dbt_correlator.parser import (
     build_dataset_info,
     build_namespace,
     extract_all_model_lineage,
-    extract_dataset_info,
     extract_model_inputs,
     extract_model_results,
     get_executed_models,
@@ -45,6 +45,7 @@ from dbt_correlator.parser import (
     map_test_status,
     parse_manifest,
     parse_run_results,
+    resolve_test_to_model_node,
 )
 
 # Path to test fixtures
@@ -482,13 +483,14 @@ def test_parse_manifest_malformed_json() -> None:
 
 
 @pytest.mark.unit
-def test_extract_dataset_info() -> None:
-    """Test dataset namespace and name extraction from test node.
+def test_resolve_test_to_model_node_and_build_dataset_info() -> None:
+    """Test resolving test to model and building dataset info.
 
     Validates that:
+        - resolve_test_to_model_node returns the correct model node
+        - build_dataset_info creates correct DatasetInfo from model node
         - Database connection → namespace (duckdb://database_name)
         - Schema + table → name (schema.table)
-        - ref() references are resolved correctly from manifest
 
     Uses:
         - tests/fixtures/manifest.json (jaffle shop with DuckDB)
@@ -500,12 +502,17 @@ def test_extract_dataset_info() -> None:
 
     # Use real test unique_id from fixture that references customers model
     test_unique_id = "test.jaffle_shop.unique_customers_customer_id.c5af1ff4b1"
+    test_node = manifest.nodes[test_unique_id]
 
-    # Act: Extract dataset info from test node
-    dataset_info = extract_dataset_info(test_unique_id, manifest)
+    # Act: Resolve test to model node, then build dataset info
+    model_node = resolve_test_to_model_node(test_node, test_unique_id, manifest)
+    dataset_info = build_dataset_info(model_node, manifest)
 
     # Assert: Returns DatasetInfo instance
     assert isinstance(dataset_info, DatasetInfo), "Should return DatasetInfo instance"
+
+    # Assert: Model node is correct
+    assert model_node["name"] == "customers", "Should resolve to customers model"
 
     # Assert: Namespace is correct (DuckDB format: duckdb://database_name)
     assert (
@@ -519,32 +526,36 @@ def test_extract_dataset_info() -> None:
 
 
 @pytest.mark.unit
-def test_extract_dataset_info_missing_reference() -> None:
-    """Test error handling when test node cannot be found or has invalid reference.
+def test_resolve_test_to_model_node_missing_reference() -> None:
+    """Test error handling when test has invalid model reference.
 
     Validates that:
-        - KeyError or ValueError raised for invalid test_unique_id
+        - KeyError or ValueError raised for test with invalid model ref
         - Error message is helpful for debugging
-        - Handles case where test node doesn't exist in manifest
 
     Uses:
         - tests/fixtures/manifest.json (jaffle shop)
-        - Invalid test_unique_id that doesn't exist
+        - Test node with refs pointing to non-existent model
     """
     # Arrange: Parse manifest fixture
     manifest = parse_manifest(str(MANIFEST_PATH))
 
-    # Use invalid test unique_id that doesn't exist in manifest
-    invalid_test_unique_id = "test.jaffle_shop.nonexistent_test_12345.abc123"
+    # Create a fake test node with invalid ref
+    fake_test_node = {
+        "refs": [{"name": "nonexistent_model_12345"}],
+    }
+    test_unique_id = "test.jaffle_shop.fake_test.abc123"
 
-    # Act & Assert: Should raise KeyError or ValueError with helpful message
-    with pytest.raises((KeyError, ValueError)) as exc_info:
-        extract_dataset_info(invalid_test_unique_id, manifest)
+    # Act & Assert: Should raise KeyError with helpful message
+    with pytest.raises(KeyError) as exc_info:
+        resolve_test_to_model_node(fake_test_node, test_unique_id, manifest)
 
-    # Assert: Error message should mention the test_unique_id or be helpful
+    # Assert: Error message should mention the model not found
     error_message = str(exc_info.value)
-    assert len(error_message) > 0, "Error message should not be empty"
-    # The error message should ideally mention the test_unique_id or indicate it's not found
+    assert (
+        "nonexistent_model_12345" in error_message
+        or "not found" in error_message.lower()
+    )
 
 
 # Helper function tests

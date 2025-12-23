@@ -415,6 +415,53 @@ def _extract_model_name(test_node: dict[str, Any], test_unique_id: str) -> str:
     return cast(str, model_name)
 
 
+def resolve_test_to_model_node(
+    test_node: dict[str, Any],
+    test_unique_id: str,
+    manifest: Manifest,
+) -> dict[str, Any]:
+    """Resolve a test node to its target model node.
+
+    Given a test node from manifest, extracts the model reference and
+    returns the corresponding model node. This is the first step in
+    building dataset info from a test.
+
+    Args:
+        test_node: Test node dictionary from manifest.nodes.
+        test_unique_id: Test unique_id for error messages.
+        manifest: Parsed manifest containing all nodes.
+
+    Returns:
+        Model node dictionary that the test validates.
+
+    Raises:
+        ValueError: If test has no refs or ref has no name.
+        KeyError: If referenced model not found in manifest.
+
+    Example:
+        >>> m = parse_manifest("target/manifest.json")
+        >>> test_node = m.nodes["test.jaffle_shop.unique_orders_order_id"]
+        >>> model_node = resolve_test_to_model_node(test_node, "test.jaffle_shop.unique_orders_order_id", m)
+        >>> model_node["name"]
+        'orders'
+    """
+    # Extract project name from test_unique_id
+    project_name = _extract_project_name(test_unique_id)
+
+    # Extract model name from test node refs
+    model_name = _extract_model_name(test_node, test_unique_id)
+
+    # Look up model node in manifest
+    model_unique_id = f"model.{project_name}.{model_name}"
+    try:
+        return cast(dict[str, Any], manifest.nodes[model_unique_id])
+    except KeyError as e:
+        raise KeyError(
+            f"Model node not found in manifest: {model_unique_id}. "
+            f"Referenced by test: {test_unique_id}"
+        ) from e
+
+
 def _extract_dataset_location(
     model_node: dict[str, Any], model_unique_id: str
 ) -> DatasetLocation:
@@ -451,67 +498,6 @@ def _extract_dataset_location(
             f"Model node missing required fields (database, schema, name): {model_unique_id}. "
             f"Error: {e}"
         ) from e
-
-
-def extract_dataset_info(test_unique_id: str, manifest: Manifest) -> DatasetInfo:
-    """Extract dataset namespace and name from test node in manifest.
-
-    Orchestrates the extraction of dataset information by:
-    1. Looking up test node in manifest
-    2. Extracting project name and model reference
-    3. Looking up model node
-    4. Constructing OpenLineage-compatible namespace and name
-
-    Args:
-        test_unique_id: Unique test identifier to lookup in manifest.nodes.
-        manifest: Parsed manifest with node metadata.
-
-    Returns:
-        DatasetInfo with resolved namespace and name.
-
-    Raises:
-        ValueError: If dataset reference cannot be resolved.
-        KeyError: If test_unique_id not found in manifest or required metadata missing.
-
-    Example:
-        >>> m = parse_manifest("target/manifest.json")
-        >>> test_id = "test.jaffle_shop.unique_orders_order_id"
-        >>> info = extract_dataset_info(test_id, m)
-        >>> print(info.namespace)  # duckdb://jaffle_shop
-        >>> print(info.name)       # main.orders
-    """
-    # Step 1: Look up test node in manifest
-    try:
-        test_node = manifest.nodes[test_unique_id]
-    except KeyError as e:
-        raise KeyError(
-            f"Test node not found in manifest: {test_unique_id}. "
-            f"Ensure the manifest.json is up-to-date with the test run."
-        ) from e
-
-    # Step 2: Extract project name and model name
-    project_name = _extract_project_name(test_unique_id)
-    model_name = _extract_model_name(test_node, test_unique_id)
-
-    # Step 3: Look up model node in manifest
-    model_unique_id = f"model.{project_name}.{model_name}"
-    try:
-        model_node = manifest.nodes[model_unique_id]
-    except KeyError as e:
-        raise KeyError(
-            f"Model node not found in manifest: {model_unique_id}. "
-            f"Referenced by test: {test_unique_id}"
-        ) from e
-
-    # Step 4: Extract database, schema, table from model
-    location = _extract_dataset_location(model_node, model_unique_id)
-
-    # Step 5: Construct OpenLineage namespace and name
-    adapter_type = manifest.metadata.get("adapter_type", "unknown")
-    namespace = f"{adapter_type}://{location.database}"
-    name = f"{location.schema}.{location.table}"
-
-    return DatasetInfo(namespace=namespace, name=name)
 
 
 def build_dataset_info(

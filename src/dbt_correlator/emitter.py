@@ -59,8 +59,9 @@ from .parser import (
     ModelExecutionResult,
     ModelLineage,
     RunResults,
-    extract_dataset_info,
+    build_dataset_info,
     map_test_status,
+    resolve_test_to_model_node,
 )
 
 logger = logging.getLogger(__name__)
@@ -179,9 +180,12 @@ def group_tests_by_dataset(
         test_kwargs = test_metadata.get("kwargs", {})
         column_name = test_kwargs.get("column_name")
 
-        # Use parser's extract_dataset_info for consistent URN format
+        # Resolve test to model, then build dataset info
         try:
-            dataset_info = extract_dataset_info(result.unique_id, manifest)
+            model_node = resolve_test_to_model_node(
+                test_node, result.unique_id, manifest
+            )
+            dataset_info = build_dataset_info(model_node, manifest)
             dataset_urn = f"{dataset_info.namespace}:{dataset_info.name}"
         except (KeyError, ValueError) as e:
             logger.warning(
