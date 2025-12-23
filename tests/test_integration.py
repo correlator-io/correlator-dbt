@@ -140,15 +140,23 @@ class TestEndToEndWithMockServer:
         # Verify exit code
         assert result.exit_code == 0, f"CLI failed with: {result.output}"
 
-        # Verify HTTP POST was made
-        assert len(mock_correlator_success.calls) == 1, "Expected exactly 1 HTTP POST"
+        # Verify HTTP POSTs were made (START + batch)
+        assert (
+            len(mock_correlator_success.calls) == 2
+        ), "Expected 2 HTTP POSTs (START + batch)"
 
-        # Verify event structure
-        events = parse_request_body(mock_correlator_success.calls[0].request)
-        assert isinstance(events, list), "Events should be a JSON array"
+        # First call should be START event
+        start_events = parse_request_body(mock_correlator_success.calls[0].request)
+        assert len(start_events) == 1, "First call should have 1 START event"
 
-        # Should have: START + test events + COMPLETE (minimum 3)
-        assert len(events) >= 3, f"Expected at least 3 events, got {len(events)}"
+        # Second call should be batch with lineage + test + terminal events
+        batch_events = parse_request_body(mock_correlator_success.calls[1].request)
+        assert isinstance(batch_events, list), "Events should be a JSON array"
+
+        # Should have: lineage events + test events + COMPLETE (minimum 2)
+        assert (
+            len(batch_events) >= 2
+        ), f"Expected at least 2 events in batch, got {len(batch_events)}"
 
         # Verify success message in output
         assert "Emitted" in result.output
@@ -260,12 +268,23 @@ class TestEndToEndWithMockServer:
 
         assert result.exit_code == 0, f"CLI failed with: {result.output}"
 
-        events = parse_request_body(mock_correlator_success.calls[0].request)
+        # Test events are in the second call (batch)
+        # First call is START event
+        assert len(mock_correlator_success.calls) == 2, "Expected 2 HTTP calls"
+        batch_events = parse_request_body(mock_correlator_success.calls[1].request)
 
-        # Find test events (COMPLETE events with non-empty inputs)
+        # Find test events (COMPLETE events with inputs that have dataQualityAssertions)
         # Note: Test events use COMPLETE type with dataQualityAssertions facets
+        # Lineage events also have inputs but without dataQualityAssertions
         test_events = [
-            e for e in events if e.get("eventType") == "COMPLETE" and e.get("inputs")
+            e
+            for e in batch_events
+            if e.get("eventType") == "COMPLETE"
+            and e.get("inputs")
+            and any(
+                "dataQualityAssertions" in inp.get("inputFacets", {})
+                for inp in e.get("inputs", [])
+            )
         ]
 
         assert (
@@ -337,30 +356,35 @@ class TestEndToEndWithMockServer:
 
         assert result.exit_code == 0, f"CLI failed with: {result.output}"
 
-        # Verify only ONE HTTP POST
+        # Verify 2 HTTP POSTs (START + batch)
         assert (
-            len(mock_correlator_success.calls) == 1
-        ), f"Expected 1 HTTP call, got {len(mock_correlator_success.calls)}"
+            len(mock_correlator_success.calls) == 2
+        ), f"Expected 2 HTTP calls, got {len(mock_correlator_success.calls)}"
 
-        events = parse_request_body(mock_correlator_success.calls[0].request)
+        # First call: START event
+        start_events = parse_request_body(mock_correlator_success.calls[0].request)
+        assert isinstance(start_events, list), "Events must be JSON array"
+        assert len(start_events) == 1, "First call should have 1 START event"
+        assert start_events[0].get("eventType") == "START", "First event must be START"
 
-        # Verify array format
-        assert isinstance(events, list), "Events must be JSON array"
+        # Second call: batch events (lineage + test + terminal)
+        batch_events = parse_request_body(mock_correlator_success.calls[1].request)
+        assert isinstance(batch_events, list), "Events must be JSON array"
 
-        # Verify event types present
-        event_types = [e.get("eventType") for e in events]
-        assert "START" in event_types, "Missing START event"
+        # Verify terminal event present in batch
+        batch_event_types = [e.get("eventType") for e in batch_events]
         assert (
-            "COMPLETE" in event_types or "FAIL" in event_types
+            "COMPLETE" in batch_event_types or "FAIL" in batch_event_types
         ), "Missing terminal event (COMPLETE/FAIL)"
 
-        # Verify all events share same runId
-        run_ids = {e["run"]["runId"] for e in events}
+        # Verify all events share same runId (across both calls)
+        all_events = start_events + batch_events
+        run_ids = {e["run"]["runId"] for e in all_events}
         assert len(run_ids) == 1, f"All events must share same runId, found: {run_ids}"
 
-        # Verify START is first and terminal is last
-        assert events[0]["eventType"] == "START", "First event must be START"
-        assert events[-1]["eventType"] in {
+        # Verify START is first and terminal is last in logical order
+        assert all_events[0]["eventType"] == "START", "First event must be START"
+        assert all_events[-1]["eventType"] in {
             "COMPLETE",
             "FAIL",
         }, "Last event must be COMPLETE or FAIL"
@@ -405,13 +429,13 @@ job:
 
         assert result.exit_code == 0, f"CLI failed with: {result.output}"
 
-        # Verify HTTP POST was made (endpoint from config was used)
-        assert len(mock_correlator_success.calls) == 1
+        # Verify HTTP POSTs were made (START + batch)
+        assert len(mock_correlator_success.calls) == 2
 
-        # Verify config values were applied
-        events = parse_request_body(mock_correlator_success.calls[0].request)
-        assert events[0]["job"]["namespace"] == "test-namespace"
-        assert events[0]["job"]["name"] == "config-test-job"
+        # Verify config values were applied (check START event)
+        start_events = parse_request_body(mock_correlator_success.calls[0].request)
+        assert start_events[0]["job"]["namespace"] == "test-namespace"
+        assert start_events[0]["job"]["name"] == "config-test-job"
 
 
 # =============================================================================
@@ -643,8 +667,8 @@ class TestErrorScenarios:
         # Fire-and-forget: exit code should be 0
         assert result.exit_code == 0, f"Expected exit code 0, got: {result.exit_code}"
 
-        # HTTP call was made
-        assert len(mock_correlator_validation_error.calls) == 1
+        # HTTP calls were made (START + batch)
+        assert len(mock_correlator_validation_error.calls) == 2
 
     def test_end_to_end_partial_success_207(
         self,
@@ -677,8 +701,8 @@ class TestErrorScenarios:
         # Fire-and-forget: exit code should be 0
         assert result.exit_code == 0, f"Expected exit code 0, got: {result.exit_code}"
 
-        # HTTP call was made
-        assert len(mock_correlator_partial_success.calls) == 1
+        # HTTP calls were made (START + batch)
+        assert len(mock_correlator_partial_success.calls) == 2
 
     def test_end_to_end_api_key_header(
         self,

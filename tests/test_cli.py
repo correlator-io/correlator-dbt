@@ -163,6 +163,7 @@ def cli_mocks(
         patch("dbt_correlator.cli.parse_run_results") as mock_parse_results,
         patch("dbt_correlator.cli.extract_all_model_lineage") as mock_extract_lineage,
         patch("dbt_correlator.cli.get_executed_models") as mock_get_executed,
+        patch("dbt_correlator.cli.get_models_with_tests") as mock_get_models_with_tests,
         patch("dbt_correlator.cli.extract_model_results") as mock_extract_model_results,
     ):
         # Set default return values
@@ -174,6 +175,7 @@ def cli_mocks(
         mock_lineage_events.return_value = [mock_run_event]
         mock_extract_lineage.return_value = []  # Empty list of ModelLineage
         mock_get_executed.return_value = {"model.my_project.users"}
+        mock_get_models_with_tests.return_value = {"model.my_project.users"}
         mock_extract_model_results.return_value = {}
 
         yield {
@@ -186,6 +188,7 @@ def cli_mocks(
             "parse_results": mock_parse_results,
             "extract_lineage": mock_extract_lineage,
             "get_executed": mock_get_executed,
+            "get_models_with_tests": mock_get_models_with_tests,
             "extract_model_results": mock_extract_model_results,
             "run_results": mock_run_results,
             "manifest": mock_manifest,
@@ -414,13 +417,20 @@ class TestEmission:
     def test_test_command_emits_events_to_correlator(
         self, runner: CliRunner, cli_mocks: dict[str, Any]
     ) -> None:
-        """Test that emit_events is called with Correlator endpoint."""
+        """Test that emit_events is called with Correlator endpoint.
+
+        Test command emits twice:
+        1. START event immediately
+        2. lineage + test + terminal events in batch
+        """
         endpoint = "http://localhost:8080/api/v1/lineage/events"
         runner.invoke(cli, ["test", "--correlator-endpoint", endpoint])
 
-        cli_mocks["emit"].assert_called_once()
-        call_args = cli_mocks["emit"].call_args
-        assert call_args[0][1] == endpoint
+        # Should be called twice (START + batch)
+        assert cli_mocks["emit"].call_count == 2
+        # Both calls should use the same endpoint
+        for call in cli_mocks["emit"].call_args_list:
+            assert call[0][1] == endpoint
 
     def test_test_command_includes_api_key_header(
         self, runner: CliRunner, cli_mocks: dict[str, Any]
@@ -438,18 +448,26 @@ class TestEmission:
             ],
         )
 
-        cli_mocks["emit"].assert_called_once()
-        call_args = cli_mocks["emit"].call_args
-        assert call_args[0][2] == api_key
+        # Should be called twice (START + batch)
+        assert cli_mocks["emit"].call_count == 2
+        # Both calls should include the API key
+        for call in cli_mocks["emit"].call_args_list:
+            assert call[0][2] == api_key
 
     def test_test_command_batch_emits_all_events(
         self, runner: CliRunner, cli_mocks: dict[str, Any]
     ) -> None:
-        """Test that all events are emitted in a single batch."""
+        """Test that lineage + test + terminal events are emitted in batch.
+
+        Test command emits:
+        1. START event immediately (1 event)
+        2. lineage (1) + test events (2) + terminal (1) = 4 events in batch
+        """
         cli_mocks["construct"].return_value = [
             cli_mocks["run_event"],
             cli_mocks["run_event"],
         ]
+        cli_mocks["construct_lineage"].return_value = [cli_mocks["run_event"]]
 
         runner.invoke(
             cli,
@@ -460,10 +478,14 @@ class TestEmission:
             ],
         )
 
-        cli_mocks["emit"].assert_called_once()
-        events = cli_mocks["emit"].call_args[0][0]
-        # Should have: START (1) + test events (2) + COMPLETE (1) = 4 events
-        assert len(events) == 4
+        # Should be called twice (START + batch)
+        assert cli_mocks["emit"].call_count == 2
+        # First call: START event only
+        start_events = cli_mocks["emit"].call_args_list[0][0][0]
+        assert len(start_events) == 1
+        # Second call: lineage (1) + test events (2) + terminal (1) = 4 events
+        batch_events = cli_mocks["emit"].call_args_list[1][0][0]
+        assert len(batch_events) == 4
 
 
 # =============================================================================
@@ -587,7 +609,8 @@ class TestSkipDbtRun:
             ],
         )
 
-        cli_mocks["emit"].assert_called_once()
+        # Test command emits twice (START + batch)
+        assert cli_mocks["emit"].call_count == 2
 
 
 # =============================================================================
@@ -703,12 +726,13 @@ correlator:
             ],
         )
 
-        # Verify the endpoint from config file was used
-        cli_mocks["emit"].assert_called_once()
-        call_args = cli_mocks["emit"].call_args
-        assert (
-            call_args[0][1] == "http://config-file-endpoint:8080/api/v1/lineage/events"
-        )
+        # Verify the endpoint from config file was used (test emits twice)
+        assert cli_mocks["emit"].call_count == 2
+        # Check both calls use the config endpoint
+        for call in cli_mocks["emit"].call_args_list:
+            assert (
+                call[0][1] == "http://config-file-endpoint:8080/api/v1/lineage/events"
+            )
 
     def test_cli_args_override_config_file(
         self, runner: CliRunner, cli_mocks: dict[str, Any], tmp_path: Path
@@ -734,10 +758,11 @@ correlator:
             ],
         )
 
-        # CLI arg should override config file
-        cli_mocks["emit"].assert_called_once()
-        call_args = cli_mocks["emit"].call_args
-        assert call_args[0][1] == "http://cli-override:8080/api/v1/lineage/events"
+        # CLI arg should override config file (test emits twice)
+        assert cli_mocks["emit"].call_count == 2
+        # Check both calls use the CLI override endpoint
+        for call in cli_mocks["emit"].call_args_list:
+            assert call[0][1] == "http://cli-override:8080/api/v1/lineage/events"
 
     def test_config_option_shown_in_help(self, runner: CliRunner) -> None:
         """Test that --config option appears in help."""
@@ -810,9 +835,11 @@ correlator:
             ],
         )
 
-        cli_mocks["emit"].assert_called_once()
-        call_args = cli_mocks["emit"].call_args
-        assert call_args[0][1] == "http://from-env:8080/api/v1/lineage/events"
+        # Test command emits twice (START + batch)
+        assert cli_mocks["emit"].call_count == 2
+        # Check both calls use the expanded endpoint
+        for call in cli_mocks["emit"].call_args_list:
+            assert call[0][1] == "http://from-env:8080/api/v1/lineage/events"
 
     def test_auto_discovers_config_in_cwd(
         self,
@@ -841,10 +868,10 @@ correlator:
             ["test"],  # No --config flag!
         )
 
-        # Verify auto-discovered endpoint was used
-        cli_mocks["emit"].assert_called_once()
-        call_args = cli_mocks["emit"].call_args
-        assert call_args[0][1] == "http://auto-discovered:8080/api/v1/lineage/events"
+        # Verify auto-discovered endpoint was used (test emits twice)
+        assert cli_mocks["emit"].call_count == 2
+        for call in cli_mocks["emit"].call_args_list:
+            assert call[0][1] == "http://auto-discovered:8080/api/v1/lineage/events"
 
     def test_env_var_overrides_config_file_in_cli(
         self,
@@ -878,10 +905,10 @@ correlator:
             ],
         )
 
-        # Verify env var wins over config file
-        cli_mocks["emit"].assert_called_once()
-        call_args = cli_mocks["emit"].call_args
-        assert call_args[0][1] == "http://from-env-var:8080/api/v1/lineage/events"
+        # Verify env var wins over config file (test emits twice)
+        assert cli_mocks["emit"].call_count == 2
+        for call in cli_mocks["emit"].call_args_list:
+            assert call[0][1] == "http://from-env-var:8080/api/v1/lineage/events"
 
 
 # =============================================================================
@@ -1258,3 +1285,406 @@ class TestDynamicJobName:
         start_call = wrapping_calls[0]
         job_name_used = start_call[0][2]
         assert job_name_used == "custom_job_name"
+
+
+# =============================================================================
+# M. dbt-ol Environment Variable Compatibility Tests
+# =============================================================================
+
+
+class TestDbtOlEnvVarCompatibility:
+    """Tests for dbt-ol compatible environment variable fallbacks.
+
+    dbt-correlator supports dbt-ol environment variables as fallbacks
+    to simplify migration from dbt-ol.
+
+    Priority order:
+        1. CLI arguments (highest)
+        2. CORRELATOR_* env vars
+        3. OPENLINEAGE_* env vars (lowest)
+    """
+
+    def test_openlineage_url_fallback_when_no_endpoint_provided(
+        self,
+        runner: CliRunner,
+        cli_mocks: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Test that OPENLINEAGE_URL env var is used when no endpoint provided."""
+        monkeypatch.setenv(
+            "OPENLINEAGE_URL", "http://openlineage-backend:5000/api/v1/lineage"
+        )
+
+        runner.invoke(cli, ["test"])
+
+        # Should use OPENLINEAGE_URL as endpoint (test emits twice)
+        assert cli_mocks["emit"].call_count == 2
+        for call in cli_mocks["emit"].call_args_list:
+            assert call[0][1] == "http://openlineage-backend:5000/api/v1/lineage"
+
+    def test_correlator_endpoint_takes_priority_over_openlineage_url(
+        self,
+        runner: CliRunner,
+        cli_mocks: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Test that CORRELATOR_ENDPOINT takes priority over OPENLINEAGE_URL."""
+        monkeypatch.setenv(
+            "CORRELATOR_ENDPOINT", "http://correlator:8080/api/v1/lineage/events"
+        )
+        monkeypatch.setenv("OPENLINEAGE_URL", "http://openlineage:5000/api/v1/lineage")
+
+        runner.invoke(cli, ["test"])
+
+        # Should use CORRELATOR_ENDPOINT, not OPENLINEAGE_URL (test emits twice)
+        assert cli_mocks["emit"].call_count == 2
+        for call in cli_mocks["emit"].call_args_list:
+            assert call[0][1] == "http://correlator:8080/api/v1/lineage/events"
+
+    def test_cli_endpoint_takes_priority_over_all_env_vars(
+        self,
+        runner: CliRunner,
+        cli_mocks: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Test that CLI --correlator-endpoint overrides all env vars."""
+        monkeypatch.setenv(
+            "CORRELATOR_ENDPOINT", "http://correlator-env:8080/api/v1/lineage/events"
+        )
+        monkeypatch.setenv(
+            "OPENLINEAGE_URL", "http://openlineage-env:5000/api/v1/lineage"
+        )
+
+        runner.invoke(
+            cli,
+            [
+                "test",
+                "--correlator-endpoint",
+                "http://cli-override:8080/api/v1/lineage/events",
+            ],
+        )
+
+        # CLI arg should win (test emits twice)
+        assert cli_mocks["emit"].call_count == 2
+        for call in cli_mocks["emit"].call_args_list:
+            assert call[0][1] == "http://cli-override:8080/api/v1/lineage/events"
+
+    def test_openlineage_api_key_fallback_when_no_api_key_provided(
+        self,
+        runner: CliRunner,
+        cli_mocks: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Test that OPENLINEAGE_API_KEY env var is used when no API key provided."""
+        monkeypatch.setenv(
+            "CORRELATOR_ENDPOINT", "http://localhost:8080/api/v1/lineage/events"
+        )
+        monkeypatch.setenv("OPENLINEAGE_API_KEY", "openlineage-api-key-123")
+
+        runner.invoke(cli, ["test"])
+
+        # Should use OPENLINEAGE_API_KEY (test emits twice)
+        assert cli_mocks["emit"].call_count == 2
+        for call in cli_mocks["emit"].call_args_list:
+            assert call[0][2] == "openlineage-api-key-123"
+
+    def test_correlator_api_key_takes_priority_over_openlineage_api_key(
+        self,
+        runner: CliRunner,
+        cli_mocks: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Test that CORRELATOR_API_KEY takes priority over OPENLINEAGE_API_KEY."""
+        monkeypatch.setenv(
+            "CORRELATOR_ENDPOINT", "http://localhost:8080/api/v1/lineage/events"
+        )
+        monkeypatch.setenv("CORRELATOR_API_KEY", "correlator-api-key-456")
+        monkeypatch.setenv("OPENLINEAGE_API_KEY", "openlineage-api-key-123")
+
+        runner.invoke(cli, ["test"])
+
+        # Should use CORRELATOR_API_KEY, not OPENLINEAGE_API_KEY (test emits twice)
+        assert cli_mocks["emit"].call_count == 2
+        for call in cli_mocks["emit"].call_args_list:
+            assert call[0][2] == "correlator-api-key-456"
+
+    def test_cli_api_key_takes_priority_over_all_env_vars(
+        self,
+        runner: CliRunner,
+        cli_mocks: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Test that CLI --correlator-api-key overrides all env vars."""
+        monkeypatch.setenv(
+            "CORRELATOR_ENDPOINT", "http://localhost:8080/api/v1/lineage/events"
+        )
+        monkeypatch.setenv("CORRELATOR_API_KEY", "correlator-env-key")
+        monkeypatch.setenv("OPENLINEAGE_API_KEY", "openlineage-env-key")
+
+        runner.invoke(
+            cli,
+            [
+                "test",
+                "--correlator-endpoint",
+                "http://localhost:8080/api/v1/lineage/events",
+                "--correlator-api-key",
+                "cli-override-key",
+            ],
+        )
+
+        # CLI arg should win (test emits twice)
+        assert cli_mocks["emit"].call_count == 2
+        for call in cli_mocks["emit"].call_args_list:
+            assert call[0][2] == "cli-override-key"
+
+    def test_missing_endpoint_shows_helpful_error_message(
+        self, runner: CliRunner
+    ) -> None:
+        """Test that missing endpoint shows error mentioning all options."""
+        result = runner.invoke(cli, ["test"])
+
+        assert result.exit_code != 0
+        # Error should mention all ways to provide endpoint
+        assert (
+            "CORRELATOR_ENDPOINT" in result.output
+            or "correlator-endpoint" in result.output
+        )
+        assert "OPENLINEAGE_URL" in result.output
+
+
+# =============================================================================
+# N. START Emission Timing Tests
+# =============================================================================
+
+
+class TestStartEmissionTiming:
+    """Tests to verify START event is emitted before dbt execution."""
+
+    def test_start_event_emitted_before_dbt_test_runs(
+        self, runner: CliRunner, cli_mocks: dict[str, Any]
+    ) -> None:
+        """Test that START event is emitted BEFORE dbt test subprocess runs.
+
+        This is critical for tracking job lifecycle in OpenLineage consumers.
+        The START event should be emitted immediately when the command starts,
+        not after dbt execution completes.
+        """
+        call_order: list[str] = []
+
+        # Track call order
+        original_subprocess = cli_mocks["subprocess"]
+
+        def track_emit(*args: Any, **kwargs: Any) -> None:
+            call_order.append("emit")
+
+        def track_subprocess(*args: Any, **kwargs: Any) -> Any:
+            call_order.append("subprocess")
+            return original_subprocess.return_value
+
+        cli_mocks["emit"].side_effect = track_emit
+        cli_mocks["subprocess"].side_effect = track_subprocess
+
+        runner.invoke(
+            cli,
+            [
+                "test",
+                "--correlator-endpoint",
+                "http://localhost:8080/api/v1/lineage/events",
+            ],
+        )
+
+        # Verify emit was called before subprocess
+        # Call order should be: emit (START), subprocess (dbt test), emit (batch)
+        assert call_order[0] == "emit", "START event should be emitted before dbt runs"
+        assert call_order[1] == "subprocess", "dbt should run after START emission"
+        assert call_order[2] == "emit", "Batch emission should happen after dbt"
+
+    def test_start_event_emitted_before_dbt_run_runs(
+        self, runner: CliRunner, cli_mocks: dict[str, Any]
+    ) -> None:
+        """Test that START event is emitted BEFORE dbt run subprocess runs."""
+        call_order: list[str] = []
+
+        original_subprocess = cli_mocks["subprocess"]
+
+        def track_emit(*args: Any, **kwargs: Any) -> None:
+            call_order.append("emit")
+
+        def track_subprocess(*args: Any, **kwargs: Any) -> Any:
+            call_order.append("subprocess")
+            return original_subprocess.return_value
+
+        cli_mocks["emit"].side_effect = track_emit
+        cli_mocks["subprocess"].side_effect = track_subprocess
+
+        runner.invoke(
+            cli,
+            [
+                "run",
+                "--correlator-endpoint",
+                "http://localhost:8080/api/v1/lineage/events",
+            ],
+        )
+
+        # Verify emit (START) was called before subprocess (dbt run)
+        assert call_order[0] == "emit", "START event should be emitted before dbt runs"
+        assert call_order[1] == "subprocess", "dbt should run after START emission"
+
+    def test_start_event_emitted_before_dbt_build_runs(
+        self, runner: CliRunner, cli_mocks: dict[str, Any]
+    ) -> None:
+        """Test that START event is emitted BEFORE dbt build subprocess runs."""
+        call_order: list[str] = []
+
+        original_subprocess = cli_mocks["subprocess"]
+
+        def track_emit(*args: Any, **kwargs: Any) -> None:
+            call_order.append("emit")
+
+        def track_subprocess(*args: Any, **kwargs: Any) -> Any:
+            call_order.append("subprocess")
+            return original_subprocess.return_value
+
+        cli_mocks["emit"].side_effect = track_emit
+        cli_mocks["subprocess"].side_effect = track_subprocess
+
+        runner.invoke(
+            cli,
+            [
+                "build",
+                "--correlator-endpoint",
+                "http://localhost:8080/api/v1/lineage/events",
+            ],
+        )
+
+        # Verify emit (START) was called before subprocess (dbt build)
+        assert call_order[0] == "emit", "START event should be emitted before dbt runs"
+        assert call_order[1] == "subprocess", "dbt should run after START emission"
+
+
+# =============================================================================
+# O. Test Command Static Lineage Emission Tests
+# =============================================================================
+
+
+class TestTestCommandLineageEmission:
+    """Tests for static lineage emission in test command.
+
+    The test command emits static lineage for models that have executed tests.
+    This enables correlation between test failures and model lineage.
+    """
+
+    def test_test_command_calls_get_models_with_tests(
+        self, runner: CliRunner, cli_mocks: dict[str, Any]
+    ) -> None:
+        """Test that test command calls get_models_with_tests to filter models."""
+        runner.invoke(
+            cli,
+            [
+                "test",
+                "--correlator-endpoint",
+                "http://localhost:8080/api/v1/lineage/events",
+            ],
+        )
+
+        # Verify get_models_with_tests was called
+        cli_mocks["get_models_with_tests"].assert_called_once()
+
+    def test_test_command_passes_model_filter_to_extract_lineage(
+        self, runner: CliRunner, cli_mocks: dict[str, Any]
+    ) -> None:
+        """Test that test command passes model filter to extract_all_model_lineage.
+
+        Only models with executed tests should have lineage extracted.
+        This is important when using --select to run specific tests.
+        """
+        cli_mocks["get_models_with_tests"].return_value = {
+            "model.my_project.users",
+            "model.my_project.orders",
+        }
+
+        runner.invoke(
+            cli,
+            [
+                "test",
+                "--correlator-endpoint",
+                "http://localhost:8080/api/v1/lineage/events",
+            ],
+        )
+
+        # Verify extract_all_model_lineage received the model filter
+        call_kwargs = cli_mocks["extract_lineage"].call_args[1]
+        model_ids = call_kwargs.get("model_ids")
+        assert model_ids == {"model.my_project.users", "model.my_project.orders"}
+
+    def test_test_command_emits_lineage_events_for_tested_models(
+        self, runner: CliRunner, cli_mocks: dict[str, Any]
+    ) -> None:
+        """Test that test command includes lineage events in batch emission."""
+        # Set up lineage events to be returned
+        cli_mocks["construct_lineage"].return_value = [
+            cli_mocks["run_event"],
+            cli_mocks["run_event"],
+        ]
+        cli_mocks["construct"].return_value = [cli_mocks["run_event"]]
+
+        runner.invoke(
+            cli,
+            [
+                "test",
+                "--correlator-endpoint",
+                "http://localhost:8080/api/v1/lineage/events",
+            ],
+        )
+
+        # Second emit call should include lineage events
+        batch_events = cli_mocks["emit"].call_args_list[1][0][0]
+        # 2 lineage + 1 test + 1 terminal = 4 events
+        assert len(batch_events) == 4
+
+    def test_test_command_uses_dataset_namespace_for_lineage(
+        self, runner: CliRunner, cli_mocks: dict[str, Any]
+    ) -> None:
+        """Test that --dataset-namespace is passed to extract_all_model_lineage."""
+        runner.invoke(
+            cli,
+            [
+                "test",
+                "--correlator-endpoint",
+                "http://localhost:8080/api/v1/lineage/events",
+                "--dataset-namespace",
+                "postgresql://mydb.example.com:5432/analytics",
+            ],
+        )
+
+        # Verify namespace_override was passed
+        call_kwargs = cli_mocks["extract_lineage"].call_args[1]
+        assert (
+            call_kwargs.get("namespace_override")
+            == "postgresql://mydb.example.com:5432/analytics"
+        )
+
+    def test_test_command_no_lineage_for_empty_model_filter(
+        self, runner: CliRunner, cli_mocks: dict[str, Any]
+    ) -> None:
+        """Test that empty model filter results in no lineage extraction.
+
+        This can happen if no tests matched the --select filter.
+        """
+        cli_mocks["get_models_with_tests"].return_value = set()  # No models with tests
+        cli_mocks["extract_lineage"].return_value = []  # No lineage
+        cli_mocks["construct_lineage"].return_value = []  # No lineage events
+
+        runner.invoke(
+            cli,
+            [
+                "test",
+                "--correlator-endpoint",
+                "http://localhost:8080/api/v1/lineage/events",
+            ],
+        )
+
+        # extract_lineage should still be called (with empty filter)
+        cli_mocks["extract_lineage"].assert_called_once()
+        call_kwargs = cli_mocks["extract_lineage"].call_args[1]
+        assert call_kwargs.get("model_ids") == set()

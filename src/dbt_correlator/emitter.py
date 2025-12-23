@@ -182,9 +182,7 @@ def group_tests_by_dataset(
 
         # Resolve test to model, then build dataset info
         try:
-            model_node = resolve_test_to_model_node(
-                test_node, result.unique_id, manifest
-            )
+            model_node = resolve_test_to_model_node(test_node, manifest)
             dataset_info = build_dataset_info(model_node, manifest)
             dataset_urn = f"{dataset_info.namespace}:{dataset_info.name}"
         except (KeyError, ValueError) as e:

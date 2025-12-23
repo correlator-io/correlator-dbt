@@ -505,7 +505,7 @@ def test_resolve_test_to_model_node_and_build_dataset_info() -> None:
     test_node = manifest.nodes[test_unique_id]
 
     # Act: Resolve test to model node, then build dataset info
-    model_node = resolve_test_to_model_node(test_node, test_unique_id, manifest)
+    model_node = resolve_test_to_model_node(test_node, manifest)
     dataset_info = build_dataset_info(model_node, manifest)
 
     # Assert: Returns DatasetInfo instance
@@ -540,15 +540,15 @@ def test_resolve_test_to_model_node_missing_reference() -> None:
     # Arrange: Parse manifest fixture
     manifest = parse_manifest(str(MANIFEST_PATH))
 
-    # Create a fake test node with invalid ref
+    # Create a fake test node with invalid ref (includes unique_id since function extracts it)
     fake_test_node = {
+        "unique_id": "test.jaffle_shop.fake_test.abc123",
         "refs": [{"name": "nonexistent_model_12345"}],
     }
-    test_unique_id = "test.jaffle_shop.fake_test.abc123"
 
     # Act & Assert: Should raise KeyError with helpful message
     with pytest.raises(KeyError) as exc_info:
-        resolve_test_to_model_node(fake_test_node, test_unique_id, manifest)
+        resolve_test_to_model_node(fake_test_node, manifest)
 
     # Assert: Error message should mention the model not found
     error_message = str(exc_info.value)

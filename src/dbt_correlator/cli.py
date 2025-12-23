@@ -19,6 +19,7 @@ The CLI follows Click conventions and integrates with the correlator ecosystem
 using the same patterns as other correlator plugins.
 """
 
+import os
 import subprocess
 import sys
 import uuid
@@ -47,6 +48,7 @@ from .parser import (
     extract_all_model_lineage,
     extract_model_results,
     get_executed_models,
+    get_models_with_tests,
     parse_manifest,
     parse_run_results,
 )
@@ -106,6 +108,28 @@ def load_config_callback(
             ctx.default_map = default_map
 
     return value
+
+
+def get_endpoint_with_fallback() -> Optional[str]:
+    """Get endpoint from env vars with dbt-ol compatible fallback.
+
+    Priority: CORRELATOR_ENDPOINT > OPENLINEAGE_URL
+
+    Returns:
+        Endpoint URL or None if neither env var is set.
+    """
+    return os.environ.get("CORRELATOR_ENDPOINT") or os.environ.get("OPENLINEAGE_URL")
+
+
+def get_api_key_with_fallback() -> Optional[str]:
+    """Get API key from env vars with dbt-ol compatible fallback.
+
+    Priority: CORRELATOR_API_KEY > OPENLINEAGE_API_KEY
+
+    Returns:
+        API key or None if neither env var is set.
+    """
+    return os.environ.get("CORRELATOR_API_KEY") or os.environ.get("OPENLINEAGE_API_KEY")
 
 
 def run_dbt_command(
@@ -195,6 +219,7 @@ def execute_test_workflow(
     namespace: str,
     job_name: Optional[str],
     api_key: Optional[str],
+    dataset_namespace: Optional[str],
     skip_dbt_run: bool,
     dbt_args: tuple[str, ...],
 ) -> int:
@@ -202,22 +227,24 @@ def execute_test_workflow(
 
     This is the main workflow function that:
     1. Parses manifest for job name (if not provided)
-    2. Creates START wrapping event
+    2. Emits START wrapping event immediately
     3. Runs dbt test (unless skip_dbt_run)
     4. Parses dbt artifacts
-    5. Constructs test events with dataQualityAssertions
-    6. Creates terminal event (COMPLETE/FAIL)
-    7. Batch emits all events to OpenLineage backend
-    8. Returns dbt exit code
+    5. Extracts static lineage for models with tests
+    6. Constructs test events with dataQualityAssertions
+    7. Creates terminal event (COMPLETE/FAIL)
+    8. Batch emits lineage + test events to OpenLineage backend
+    9. Returns dbt exit code
 
     Args:
         project_dir: Path to dbt project directory.
         profiles_dir: Path to dbt profiles directory.
         correlator_endpoint: OpenLineage API endpoint URL.
-        namespace: OpenLineage namespace (e.g., "dbt").
+        namespace: OpenLineage job namespace (e.g., "dbt").
         job_name: Job name for OpenLineage events. If None, uses
             {project_name}.test format (dbt-ol compatible).
         api_key: Optional API key for authentication.
+        dataset_namespace: Optional dataset namespace override for strict OL compliance.
         skip_dbt_run: If True, skip dbt execution and use existing artifacts.
         dbt_args: Additional arguments to pass to dbt test.
 
@@ -242,11 +269,15 @@ def execute_test_workflow(
         except FileNotFoundError:
             job_name = "dbt.test"  # Fallback if no manifest yet
 
-    # 2. Create START event
+    # 2. Create and emit START event immediately (aligned with run/build)
     start_timestamp = datetime.now(timezone.utc)
     start_event = create_wrapping_event(
         "START", run_id, job_name, namespace, start_timestamp
     )
+    try:
+        emit_events([start_event], correlator_endpoint, api_key)
+    except (ConnectionError, TimeoutError, ValueError) as e:
+        click.echo(f"Warning: Failed to emit START event: {e}", err=True)
 
     # 3. Run dbt test (unless skip)
     if not skip_dbt_run:
@@ -269,24 +300,48 @@ def execute_test_workflow(
         click.echo(f"Error: {e}", err=True)
         return 1
 
-    # 5. Construct test events
+    # 5. Get models with executed tests (handles --select filtering)
+    models_with_tests = get_models_with_tests(run_results, manifest)
+
+    # 6. Extract static lineage ONLY for models with executed tests
+    model_lineages = extract_all_model_lineage(
+        manifest,
+        model_ids=models_with_tests,
+        namespace_override=dataset_namespace,
+    )
+
+    # 7. Construct lineage events (no runtime metrics for test command)
+    event_time = datetime.now(timezone.utc).isoformat()
+    lineage_events = construct_lineage_events(
+        model_lineages=model_lineages,
+        run_id=run_id,
+        job_namespace=namespace,
+        producer=PRODUCER,
+        event_time=event_time,
+        execution_results=None,  # No runtime metrics from dbt test
+    )
+
+    # 8. Construct test events with dataQualityAssertions
     test_events = construct_test_events(
         run_results, manifest, namespace, job_name, run_id
     )
 
-    # 6. Create terminal event (COMPLETE or FAIL)
+    # 9. Create terminal event (COMPLETE or FAIL)
     terminal_timestamp = datetime.now(timezone.utc)
     terminal_type = "COMPLETE" if dbt_exit_code == 0 else "FAIL"
     terminal_event = create_wrapping_event(
         terminal_type, run_id, job_name, namespace, terminal_timestamp
     )
 
-    # 7. Batch emit all events
-    all_events = [start_event, *test_events, terminal_event]
+    # 10. Batch emit lineage + test + terminal events
+    all_events = [*lineage_events, *test_events, terminal_event]
 
     try:
         emit_events(all_events, correlator_endpoint, api_key)
-        click.echo(f"Emitted {len(all_events)} events")
+        click.echo(
+            f"Emitted {len(lineage_events)} lineage events + "
+            f"{len(test_events)} test events + terminal event"
+        )
     except (ConnectionError, TimeoutError, ValueError) as e:
         click.echo(f"Warning: Failed to emit events: {e}", err=True)
         # Don't fail - lineage is fire-and-forget
@@ -332,9 +387,9 @@ def cli() -> None:
 @click.option(
     "--correlator-endpoint",
     envvar="CORRELATOR_ENDPOINT",
-    required=True,
+    default=None,
     help="OpenLineage API endpoint URL. Works with Correlator or any OL-compatible "
-    "backend (env: CORRELATOR_ENDPOINT)",
+    "backend (env: CORRELATOR_ENDPOINT or OPENLINEAGE_URL)",
     type=str,
 )
 @click.option(
@@ -348,13 +403,20 @@ def cli() -> None:
     "--correlator-api-key",
     envvar="CORRELATOR_API_KEY",
     default=None,
-    help="Optional API key for authentication (env: CORRELATOR_API_KEY)",
+    help="Optional API key for authentication (env: CORRELATOR_API_KEY or OPENLINEAGE_API_KEY)",
     type=str,
 )
 @click.option(
     "--job-name",
     default=None,
     help="Job name for OpenLineage events (default: {project_name}.test)",
+    type=str,
+)
+@click.option(
+    "--dataset-namespace",
+    envvar="DBT_CORRELATOR_NAMESPACE",
+    default=None,
+    help="Dataset namespace override (default: {adapter}://{database})",
     type=str,
 )
 @click.option(
@@ -367,10 +429,11 @@ def cli() -> None:
 def test(
     project_dir: str,
     profiles_dir: str,
-    correlator_endpoint: str,
+    correlator_endpoint: Optional[str],
     openlineage_namespace: str,
     correlator_api_key: Optional[str],
     job_name: Optional[str],
+    dataset_namespace: Optional[str],
     skip_dbt_run: bool,
     dbt_args: tuple[str, ...],
 ) -> None:
@@ -396,11 +459,23 @@ def test(
         $ dbt-correlator test --skip-dbt-run --correlator-endpoint http://localhost:8080/api/v1/lineage/events
 
         \b
-        # Use environment variables
-        $ export CORRELATOR_ENDPOINT=http://localhost:8080/api/v1/lineage/events
+        # Use environment variables (dbt-ol compatible)
+        $ export OPENLINEAGE_URL=http://localhost:8080/api/v1/lineage/events
         $ export OPENLINEAGE_NAMESPACE=production
         $ dbt-correlator test
     """
+    # Use helper functions for dbt-ol compatible env var fallbacks
+    if not correlator_endpoint:
+        correlator_endpoint = get_endpoint_with_fallback()
+    if not correlator_endpoint:
+        raise click.UsageError(
+            "Missing --correlator-endpoint. "
+            "Set via CLI, CORRELATOR_ENDPOINT, or OPENLINEAGE_URL env var."
+        )
+
+    if not correlator_api_key:
+        correlator_api_key = get_api_key_with_fallback()
+
     exit_code = execute_test_workflow(
         project_dir=project_dir,
         profiles_dir=profiles_dir,
@@ -408,6 +483,7 @@ def test(
         namespace=openlineage_namespace,
         job_name=job_name,
         api_key=correlator_api_key,
+        dataset_namespace=dataset_namespace,
         skip_dbt_run=skip_dbt_run,
         dbt_args=dbt_args,
     )
@@ -574,9 +650,9 @@ def execute_run_workflow(
 @click.option(
     "--correlator-endpoint",
     envvar="CORRELATOR_ENDPOINT",
-    required=True,
+    default=None,
     help="OpenLineage API endpoint URL. Works with Correlator or any OL-compatible "
-    "backend (env: CORRELATOR_ENDPOINT)",
+    "backend (env: CORRELATOR_ENDPOINT or OPENLINEAGE_URL)",
     type=str,
 )
 @click.option(
@@ -590,7 +666,7 @@ def execute_run_workflow(
     "--correlator-api-key",
     envvar="CORRELATOR_API_KEY",
     default=None,
-    help="Optional API key for authentication (env: CORRELATOR_API_KEY)",
+    help="Optional API key for authentication (env: CORRELATOR_API_KEY or OPENLINEAGE_API_KEY)",
     type=str,
 )
 @click.option(
@@ -616,7 +692,7 @@ def execute_run_workflow(
 def run(
     project_dir: str,
     profiles_dir: str,
-    correlator_endpoint: str,
+    correlator_endpoint: Optional[str],
     openlineage_namespace: str,
     correlator_api_key: Optional[str],
     job_name: Optional[str],
@@ -650,6 +726,18 @@ def run(
         # Use custom dataset namespace for strict OpenLineage compliance
         $ dbt-correlator run --dataset-namespace postgresql://localhost:5432/mydb
     """
+    # Use helper functions for dbt-ol compatible env var fallbacks
+    if not correlator_endpoint:
+        correlator_endpoint = get_endpoint_with_fallback()
+    if not correlator_endpoint:
+        raise click.UsageError(
+            "Missing --correlator-endpoint. "
+            "Set via CLI, CORRELATOR_ENDPOINT, or OPENLINEAGE_URL env var."
+        )
+
+    if not correlator_api_key:
+        correlator_api_key = get_api_key_with_fallback()
+
     exit_code = execute_run_workflow(
         project_dir=project_dir,
         profiles_dir=profiles_dir,
@@ -841,9 +929,9 @@ def execute_build_workflow(
 @click.option(
     "--correlator-endpoint",
     envvar="CORRELATOR_ENDPOINT",
-    required=True,
+    default=None,
     help="OpenLineage API endpoint URL. Works with Correlator or any OL-compatible "
-    "backend (env: CORRELATOR_ENDPOINT)",
+    "backend (env: CORRELATOR_ENDPOINT or OPENLINEAGE_URL)",
     type=str,
 )
 @click.option(
@@ -857,7 +945,7 @@ def execute_build_workflow(
     "--correlator-api-key",
     envvar="CORRELATOR_API_KEY",
     default=None,
-    help="Optional API key for authentication (env: CORRELATOR_API_KEY)",
+    help="Optional API key for authentication (env: CORRELATOR_API_KEY or OPENLINEAGE_API_KEY)",
     type=str,
 )
 @click.option(
@@ -883,7 +971,7 @@ def execute_build_workflow(
 def build(
     project_dir: str,
     profiles_dir: str,
-    correlator_endpoint: str,
+    correlator_endpoint: Optional[str],
     openlineage_namespace: str,
     correlator_api_key: Optional[str],
     job_name: Optional[str],
@@ -921,6 +1009,18 @@ def build(
         # Use custom dataset namespace for strict OpenLineage compliance
         $ dbt-correlator build --dataset-namespace postgresql://localhost:5432/mydb
     """
+    # Use helper functions for dbt-ol compatible env var fallbacks
+    if not correlator_endpoint:
+        correlator_endpoint = get_endpoint_with_fallback()
+    if not correlator_endpoint:
+        raise click.UsageError(
+            "Missing --correlator-endpoint. "
+            "Set via CLI, CORRELATOR_ENDPOINT, or OPENLINEAGE_URL env var."
+        )
+
+    if not correlator_api_key:
+        correlator_api_key = get_api_key_with_fallback()
+
     exit_code = execute_build_workflow(
         project_dir=project_dir,
         profiles_dir=profiles_dir,

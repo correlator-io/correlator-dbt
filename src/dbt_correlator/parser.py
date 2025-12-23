@@ -417,7 +417,6 @@ def _extract_model_name(test_node: dict[str, Any], test_unique_id: str) -> str:
 
 def resolve_test_to_model_node(
     test_node: dict[str, Any],
-    test_unique_id: str,
     manifest: Manifest,
 ) -> dict[str, Any]:
     """Resolve a test node to its target model node.
@@ -428,7 +427,6 @@ def resolve_test_to_model_node(
 
     Args:
         test_node: Test node dictionary from manifest.nodes.
-        test_unique_id: Test unique_id for error messages.
         manifest: Parsed manifest containing all nodes.
 
     Returns:
@@ -441,10 +439,13 @@ def resolve_test_to_model_node(
     Example:
         >>> m = parse_manifest("target/manifest.json")
         >>> test_node = m.nodes["test.jaffle_shop.unique_orders_order_id"]
-        >>> model_node = resolve_test_to_model_node(test_node, "test.jaffle_shop.unique_orders_order_id", m)
+        >>> model_node = resolve_test_to_model_node(test_node, m)
         >>> model_node["name"]
         'orders'
     """
+    # Extract unique_id from node
+    test_unique_id = test_node["unique_id"]
+
     # Extract project name from test_unique_id
     project_name = _extract_project_name(test_unique_id)
 
