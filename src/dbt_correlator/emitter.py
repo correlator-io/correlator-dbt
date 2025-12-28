@@ -54,6 +54,7 @@ from openlineage.client.generated.output_statistics_output_dataset import (
     OutputStatisticsOutputDatasetFacet,
 )
 
+from . import __version__
 from .parser import (
     Manifest,
     ModelExecutionResult,
@@ -67,7 +68,6 @@ from .parser import (
 logger = logging.getLogger(__name__)
 
 # Plugin version for producer field
-__version__ = "0.1.0"
 PRODUCER = f"https://github.com/correlator-io/dbt-correlator/{__version__}"
 
 
