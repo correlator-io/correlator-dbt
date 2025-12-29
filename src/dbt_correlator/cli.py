@@ -54,10 +54,6 @@ from .parser import (
     parse_run_results,
 )
 
-# =============================================================================
-# Unified Workflow Configuration and Execution
-# =============================================================================
-
 
 @dataclass
 class WorkflowConfig:
@@ -299,8 +295,8 @@ def resolve_credentials(
     Priority for API key: CLI arg > CORRELATOR_API_KEY > OPENLINEAGE_API_KEY
 
     Args:
-        endpoint: Endpoint from CLI option (may be None).
-        api_key: API key from CLI option (may be None).
+        endpoint: Endpoint from CLI option (maybe None).
+        api_key: API key from CLI option (maybe None).
 
     Returns:
         Tuple of (resolved_endpoint, resolved_api_key).
@@ -593,7 +589,7 @@ def cli() -> None:
     "--openlineage-namespace",
     envvar="OPENLINEAGE_NAMESPACE",
     default="dbt",
-    help="Namespace for OpenLineage events (default: dbt, env: OPENLINEAGE_NAMESPACE)",
+    help="Job namespace for OpenLineage events (default: dbt, env: OPENLINEAGE_NAMESPACE)",
     type=str,
 )
 @click.option(
@@ -627,7 +623,7 @@ def test(
     project_dir: str,
     profiles_dir: str,
     correlator_endpoint: Optional[str],
-    openlineage_namespace: str,
+    openlineage_namespace: str,  # job namespace
     correlator_api_key: Optional[str],
     job_name: Optional[str],
     dataset_namespace: Optional[str],
@@ -712,7 +708,7 @@ def test(
     "--openlineage-namespace",
     envvar="OPENLINEAGE_NAMESPACE",
     default="dbt",
-    help="Namespace for OpenLineage events (default: dbt, env: OPENLINEAGE_NAMESPACE)",
+    help="Job namespace for OpenLineage events (default: dbt, env: OPENLINEAGE_NAMESPACE)",
     type=str,
 )
 @click.option(
@@ -746,7 +742,7 @@ def run(
     project_dir: str,
     profiles_dir: str,
     correlator_endpoint: Optional[str],
-    openlineage_namespace: str,
+    openlineage_namespace: str,  # job namespace
     correlator_api_key: Optional[str],
     job_name: Optional[str],
     dataset_namespace: Optional[str],
@@ -830,7 +826,7 @@ def run(
     "--openlineage-namespace",
     envvar="OPENLINEAGE_NAMESPACE",
     default="dbt",
-    help="Namespace for OpenLineage events (default: dbt, env: OPENLINEAGE_NAMESPACE)",
+    help="Job namespace for OpenLineage events (default: dbt, env: OPENLINEAGE_NAMESPACE)",
     type=str,
 )
 @click.option(
@@ -864,7 +860,7 @@ def build(
     project_dir: str,
     profiles_dir: str,
     correlator_endpoint: Optional[str],
-    openlineage_namespace: str,
+    openlineage_namespace: str,  # job namespace
     correlator_api_key: Optional[str],
     job_name: Optional[str],
     dataset_namespace: Optional[str],

@@ -20,6 +20,44 @@ Eliminates manual detective work when dbt tests fail:
 
 ---
 
+## Quick Start
+
+```bash
+# Install
+pip install correlator-dbt
+
+# Configure endpoint
+export CORRELATOR_ENDPOINT=http://localhost:8080/api/v1/lineage/events
+
+# Run dbt tests with correlation
+cd your-dbt-project
+dbt-correlator test
+
+# Or run dbt models with lineage tracking
+dbt-correlator run
+
+# Or run dbt build (models + tests combined)
+dbt-correlator build
+```
+
+That's it. Your test results and lineage are now being correlated.
+
+---
+
+## How It Works
+
+`dbt-correlator` wraps dbt commands and emits OpenLineage events with lineage and test results:
+
+1. **START** - Emits job start event
+2. **Execute** - Runs `dbt test`, `dbt run`, or `dbt build`
+3. **Parse** - Extracts results from dbt artifacts
+4. **Emit** - Sends lineage + test events in single batch HTTP POST
+5. **COMPLETE/FAIL** - Emits job completion event
+
+See [Architecture](docs/ARCHITECTURE.md) for technical details.
+
+---
+
 ## Why It Matters
 
 **The Problem:**
@@ -67,7 +105,9 @@ The current version is in early development stage, so expect possible API change
 
 **For detailed usage, configuration, and development:**
 
-- **Development**: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) - Development setup, testing, local environment, pro tips
+- **Configuration**: [docs/CONFIGURATION.md](docs/CONFIGURATION.md) - All CLI options, config file, environment variables
+- **Architecture**: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - Internal design, data flow, OpenLineage events
+- **Development**: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) - Development setup, testing, local environment
 - **Contributing**: [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) - Contribution guidelines, branch naming, commit format
 - **Deployment**: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) - Release process, versioning, PyPI publishing
 

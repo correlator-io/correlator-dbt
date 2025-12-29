@@ -25,21 +25,19 @@ import pytest
 
 from dbt_correlator.parser import (
     DatasetInfo,
-    DatasetLocation,
     Manifest,
     ModelExecutionResult,
     ModelLineage,
     RunResults,
     RunResultsMetadata,
     TestResult,
-    _extract_dataset_location,
-    _extract_model_name,
-    _extract_project_name,
     build_dataset_info,
     build_namespace,
     extract_all_model_lineage,
     extract_model_inputs,
+    extract_model_name,
     extract_model_results,
+    extract_project_name,
     get_executed_models,
     get_models_with_tests,
     map_test_status,
@@ -573,7 +571,7 @@ def test_extract_project_name_valid() -> None:
     test_unique_id = "test.jaffle_shop.unique_customers_customer_id.c5af1ff4b1"
 
     # Act: Extract project name
-    project_name = _extract_project_name(test_unique_id)
+    project_name = extract_project_name(test_unique_id)
 
     # Assert: Should return correct project name
     assert (
@@ -594,7 +592,7 @@ def test_extract_project_name_invalid_format() -> None:
 
     # Act & Assert: Should raise ValueError
     with pytest.raises(ValueError) as exc_info:  # noqa: PT011
-        _extract_project_name(invalid_unique_id)
+        extract_project_name(invalid_unique_id)
 
     # Assert: Error message should mention format
     error_message = str(exc_info.value)
@@ -610,7 +608,7 @@ def test_extract_project_name_empty_string() -> None:
     """
     # Act & Assert: Should raise ValueError
     with pytest.raises(ValueError) as exc_info:  # noqa: PT011
-        _extract_project_name("")
+        extract_project_name("")
 
     # Assert: Error message should be helpful
     error_message = str(exc_info.value)
@@ -630,7 +628,7 @@ def test_get_model_name_from_test_valid() -> None:
     test_unique_id = "test.jaffle_shop.unique_customers_customer_id.c5af1ff4b1"
 
     # Act: Extract model name
-    model_name = _extract_model_name(test_node, test_unique_id)
+    model_name = extract_model_name(test_node, test_unique_id)
 
     # Assert: Should return correct model name
     assert model_name == "customers", f"Expected 'customers', got '{model_name}'"
@@ -647,7 +645,7 @@ def test_get_model_name_from_test_multiple_refs() -> None:
     test_unique_id = "test.jaffle_shop.referential_integrity.abc123"
 
     # Act: Extract model name
-    model_name = _extract_model_name(test_node, test_unique_id)
+    model_name = extract_model_name(test_node, test_unique_id)
 
     # Assert: Should return first ref (MVP behavior)
     assert (
@@ -669,7 +667,7 @@ def test_get_model_name_from_test_no_refs() -> None:
 
     # Act & Assert: Should raise ValueError
     with pytest.raises(ValueError) as exc_info:  # noqa: PT011
-        _extract_model_name(test_node, test_unique_id)
+        extract_model_name(test_node, test_unique_id)
 
     # Assert: Error message should mention refs
     error_message = str(exc_info.value)
@@ -689,7 +687,7 @@ def test_get_model_name_from_test_empty_refs() -> None:
 
     # Act & Assert: Should raise ValueError
     with pytest.raises(ValueError) as exc_info:  # noqa: PT011
-        _extract_model_name(test_node, test_unique_id)
+        extract_model_name(test_node, test_unique_id)
 
     # Assert: Error message should be helpful
     error_message = str(exc_info.value)
@@ -708,125 +706,11 @@ def test_get_model_name_from_test_ref_without_name() -> None:
 
     # Act & Assert: Should raise ValueError
     with pytest.raises(ValueError) as exc_info:  # noqa: PT011
-        _extract_model_name(test_node, test_unique_id)
+        extract_model_name(test_node, test_unique_id)
 
     # Assert: Error message should mention name issue
     error_message = str(exc_info.value)
     assert "name" in error_message.lower(), "Error should mention missing name"
-
-
-@pytest.mark.unit
-def test_extract_dataset_location_valid() -> None:
-    """Test extracting database, schema, table from valid model node.
-
-    Validates:
-        - Correctly extracts all three fields
-        - Returns DatasetLocation with proper values
-    """
-    # Arrange: Valid model node
-    model_node = {"database": "jaffle_shop", "schema": "main", "name": "customers"}
-    model_unique_id = "model.jaffle_shop.customers"
-
-    # Act: Extract location
-    location = _extract_dataset_location(model_node, model_unique_id)
-
-    # Assert: Should return DatasetLocation instance
-    assert isinstance(
-        location, DatasetLocation
-    ), "Should return DatasetLocation instance"
-
-    # Assert: Should have correct values
-    assert (
-        location.database == "jaffle_shop"
-    ), f"Expected 'jaffle_shop', got '{location.database}'"
-    assert location.schema == "main", f"Expected 'main', got '{location.schema}'"
-    assert (
-        location.table == "customers"
-    ), f"Expected 'customers', got '{location.table}'"
-
-
-@pytest.mark.unit
-def test_extract_dataset_location_with_alias() -> None:
-    """Test that alias is preferred over name when present.
-
-    Validates handling of dbt model alias feature.
-    """
-    # Arrange: Model node with alias
-    model_node = {
-        "database": "analytics",
-        "schema": "dbt_prod",
-        "name": "stg_customers",
-        "alias": "customers",  # Alias overrides name
-    }
-    model_unique_id = "model.my_project.stg_customers"
-
-    # Act: Extract location
-    location = _extract_dataset_location(model_node, model_unique_id)
-
-    # Assert: Should use alias instead of name
-    assert (
-        location.table == "customers"
-    ), f"Should use alias 'customers', got '{location.table}'"
-
-
-@pytest.mark.unit
-def test_extract_dataset_location_missing_database() -> None:
-    """Test error handling when database field is missing.
-
-    Validates that:
-        - KeyError is raised
-        - Error message is helpful
-    """
-    # Arrange: Model node missing database
-    model_node = {"schema": "main", "name": "customers"}  # Missing database
-    model_unique_id = "model.jaffle_shop.customers"
-
-    # Act & Assert: Should raise KeyError
-    with pytest.raises(KeyError) as exc_info:
-        _extract_dataset_location(model_node, model_unique_id)
-
-    # Assert: Error message should mention missing fields
-    error_message = str(exc_info.value)
-    assert len(error_message) > 0, "Error message should not be empty"
-    assert model_unique_id in error_message, "Error should include model ID"
-
-
-@pytest.mark.unit
-def test_extract_dataset_location_missing_schema() -> None:
-    """Test error handling when schema field is missing.
-
-    Validates proper error handling for incomplete model nodes.
-    """
-    # Arrange: Model node missing schema
-    model_node = {"database": "jaffle_shop", "name": "customers"}  # Missing schema
-    model_unique_id = "model.jaffle_shop.customers"
-
-    # Act & Assert: Should raise KeyError
-    with pytest.raises(KeyError) as exc_info:
-        _extract_dataset_location(model_node, model_unique_id)
-
-    # Assert: Error message should be helpful
-    error_message = str(exc_info.value)
-    assert len(error_message) > 0, "Error message should not be empty"
-
-
-@pytest.mark.unit
-def test_extract_dataset_location_missing_name_and_alias() -> None:
-    """Test error handling when both name and alias are missing.
-
-    Validates edge case handling.
-    """
-    # Arrange: Model node missing both name and alias
-    model_node = {"database": "jaffle_shop", "schema": "main"}  # Missing name
-    model_unique_id = "model.jaffle_shop.unknown"
-
-    # Act & Assert: Should raise KeyError
-    with pytest.raises(KeyError) as exc_info:
-        _extract_dataset_location(model_node, model_unique_id)
-
-    # Assert: Error message should be helpful
-    error_message = str(exc_info.value)
-    assert len(error_message) > 0, "Error message should not be empty"
 
 
 @pytest.mark.unit
