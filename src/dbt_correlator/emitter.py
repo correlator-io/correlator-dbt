@@ -154,16 +154,17 @@ def group_tests_by_dataset(
         manifest: Parsed dbt manifest.json.
 
     Returns:
-        Dictionary mapping dataset URN to list of test results.
-        Key: Dataset URN (namespace:name)
+        Dictionary mapping dataset key to list of test results.
+        Key: Dataset key in format "namespace|name" (pipe separator to avoid
+             conflicts with "://" in namespace URLs)
         Value: List of test result dictionaries with test metadata
 
     Example:
         >>> grouped = group_tests_by_dataset(run_results, manifest)
-        >>> for dataset_urn, tests in grouped.items():
-        ...     print(f"Dataset: {dataset_urn}, Tests: {len(tests)}")
-        Dataset: jaffle_shop:main.customers, Tests: 3
-        Dataset: jaffle_shop:main.orders, Tests: 5
+        >>> for dataset_key, tests in grouped.items():
+        ...     print(f"Dataset: {dataset_key}, Tests: {len(tests)}")
+        Dataset: duckdb://jaffle_shop|main.customers, Tests: 3
+        Dataset: duckdb://jaffle_shop|main.orders, Tests: 5
     """
     grouped: dict[str, list[dict[str, Any]]] = {}
 
@@ -184,7 +185,8 @@ def group_tests_by_dataset(
         try:
             model_node = resolve_test_to_model_node(test_node, manifest)
             dataset_info = build_dataset_info(model_node, manifest)
-            dataset_urn = f"{dataset_info.namespace}:{dataset_info.name}"
+            # Use pipe separator to avoid conflicts with "://" in namespace URLs
+            dataset_key = f"{dataset_info.namespace}|{dataset_info.name}"
         except (KeyError, ValueError) as e:
             logger.warning(
                 f"Could not extract dataset info for test {result.unique_id}: {e}"
@@ -192,10 +194,10 @@ def group_tests_by_dataset(
             continue
 
         # Add test result to grouped dict
-        if dataset_urn not in grouped:
-            grouped[dataset_urn] = []
+        if dataset_key not in grouped:
+            grouped[dataset_key] = []
 
-        grouped[dataset_urn].append(
+        grouped[dataset_key].append(
             {
                 "unique_id": result.unique_id,
                 "status": result.status,
@@ -247,12 +249,12 @@ def construct_test_events(
     grouped = group_tests_by_dataset(run_results, manifest)
     events = []
 
-    for dataset_urn, tests in grouped.items():
-        # Parse dataset URN: namespace:schema.table
+    for dataset_key, tests in grouped.items():
+        # Parse dataset key: namespace|name (pipe separator avoids "://" conflicts)
         try:
-            dataset_namespace, name_part = dataset_urn.split(":", 1)
+            dataset_namespace, dataset_name = dataset_key.split("|", 1)
         except ValueError:
-            logger.warning(f"Invalid dataset URN format: {dataset_urn}")
+            logger.warning(f"Invalid dataset key format: {dataset_key}")
             continue
 
         # Build assertions from test results
@@ -279,7 +281,7 @@ def construct_test_events(
         # Create dataset with facet
         dataset = InputDataset(  # type: ignore[call-arg]
             namespace=dataset_namespace,
-            name=name_part,
+            name=dataset_name,
             inputFacets={"dataQualityAssertions": dqa_facet},
         )
 
