@@ -84,3 +84,92 @@ jobs:
           else
             echo "PR title follows the convention. Nice work!"
           fi
+
+  changelog:
+    name: Changelog Entry Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: python -m pip install tomli
+
+      - name: Check changelog entry for version-changing PRs
+        run: |
+          # Get branch name
+          branch="${{ github.head_ref }}"
+          echo "Branch: $branch"
+
+          # Check if branch causes version change
+          if [[ "$branch" != minor/* && "$branch" != patch/* && "$branch" != major/* ]]; then
+            echo "Branch '$branch' does not trigger a version change. Skipping changelog check."
+            exit 0
+          fi
+
+          echo "Branch '$branch' will trigger a version change. Checking for changelog entry..."
+
+          # Get current version from git tags (same source of truth as release workflow)
+          # This ensures PR checks and release workflow calculate the same next version
+          cat > get_version.py << 'EOL'
+          import tomli
+          with open("pyproject.toml", "rb") as f:
+              data = tomli.load(f)
+              print(data["project"]["version"])
+          EOL
+
+          git fetch --tags
+          if git tag -l "v*" | grep -q .; then
+            latest_tag=$(git tag -l "v*" | sort -V | tail -n 1)
+            CURRENT_VERSION=${latest_tag#v}
+            echo "Current version (from latest tag): $CURRENT_VERSION"
+          else
+            CURRENT_VERSION=$(python get_version.py)
+            echo "No tags found, using pyproject.toml version: $CURRENT_VERSION"
+          fi
+
+          # Calculate next version based on branch prefix
+          IFS='.' read -r major minor patch <<< "$CURRENT_VERSION"
+          major=${major:-0}
+          minor=${minor:-0}
+          patch=${patch:-0}
+
+          if [[ "$branch" == minor/* ]]; then
+            minor=$((minor + 1))
+            patch=0
+          elif [[ "$branch" == patch/* ]]; then
+            patch=$((patch + 1))
+          elif [[ "$branch" == major/* ]]; then
+            major=$((major + 1))
+            minor=0
+            patch=0
+          fi
+
+          NEXT_VERSION="$major.$minor.$patch"
+          echo "Expected next version: $NEXT_VERSION"
+
+          # Check if CHANGELOG.md has entry for next version with proper date format
+          # Format: ## [X.Y.Z] - YYYY-MM-DD (Keep a Changelog standard)
+          if grep -qE "## \[$NEXT_VERSION\] - [0-9]{4}-[0-9]{2}-[0-9]{2}" CHANGELOG.md; then
+            echo "✅ Changelog entry found for version $NEXT_VERSION with valid date"
+          else
+            echo "::error::Missing or malformed changelog entry for version $NEXT_VERSION"
+            echo ""
+            echo "This PR will release version $NEXT_VERSION but CHANGELOG.md has no valid entry for it."
+            echo ""
+            echo "Please add a changelog entry in CHANGELOG.md with the correct format:"
+            echo ""
+            echo "  ## [$NEXT_VERSION] - $(date +%Y-%m-%d)"
+            echo "  "
+            echo "  ### Added"
+            echo "  - Your changes here"
+            echo ""
+            echo "Note: The date must be in YYYY-MM-DD format (Keep a Changelog standard)."
+            exit 1
+          fi
