@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "correlator-dbt"
-version = "0.0.1"
+version = "0.1.0"
 description = "dbt plugin that emits OpenLineage events with test results for automated incident correlation"
 readme = "README.md"
 authors = [
@@ -41,8 +41,8 @@ requires-python = ">=3.9"
 dependencies = [
     "openlineage-python>=1.0.0",
     "click>=8.1.0",
-    "requests>=2.28.0",  # Explicit dependency for HTTP emission
-    "PyYAML>=6.0",  # YAML config file parsing
+    "requests>=2.28.0",
+    "PyYAML>=6.0",
 ]
 
 [project.license]
@@ -193,7 +193,7 @@ norecursedirs = [
     "__pycache__",
 ]
 python_files = "test_*.py"
-python_classes = "Test[!R]*"  # Exclude TestResult dataclass from parser.py
+python_classes = "Test[!R]*"
 python_functions = "test_*"
 addopts = [
     "--cov=dbt_correlator",
@@ -255,10 +255,10 @@ exclude_dirs = [
     "docs",
 ]
 skips = [
-    "B101",  # assert_used - needed for tests
-    "B404",  # import_subprocess - required for dbt execution
-    "B603",  # subprocess_without_shell_equals_true - we use list form intentionally
-    "B607",  # start_process_with_partial_path - dbt should be in PATH
+    "B101",
+    "B404",
+    "B603",
+    "B607",
 ]
 
 [dependency-groups]
