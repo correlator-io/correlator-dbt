@@ -491,25 +491,28 @@ def run_dbt_command(
         >>> result.returncode
         0
     """
-    # Expand ~ in paths for shell-like behavior
-    expanded_profiles_dir = str(Path(profiles_dir).expanduser())
+    # Convert paths to absolute for consistent behavior regardless of cwd
+    # This ensures the command works when run from any directory
+    abs_project_dir = str(Path(project_dir).resolve())
+    abs_profiles_dir = str(Path(profiles_dir).expanduser().resolve())
 
     cmd = [
         "dbt",
         command,
         "--project-dir",
-        project_dir,
+        abs_project_dir,
         "--profiles-dir",
-        expanded_profiles_dir,
+        abs_profiles_dir,
         *dbt_args,
     ]
 
     try:
         # Stream output to console (no capture)
+        # Use absolute project dir as cwd for dbt to find dbt_project.yml
         return subprocess.run(
             cmd,
             check=False,  # Don't raise on non-zero exit
-            cwd=project_dir,
+            cwd=abs_project_dir,
         )
     except FileNotFoundError as e:
         raise FileNotFoundError(

@@ -23,7 +23,15 @@ Architecture:
 For detailed documentation, see: https://github.com/correlator-io/correlator-dbt
 """
 
-__version__ = "0.1.0"
+from importlib.metadata import PackageNotFoundError, version
+
+__version__: str
+try:
+    __version__ = version("correlator-dbt")
+except PackageNotFoundError:
+    # Package not installed (development mode without editable install)
+    __version__ = "0.0.0+dev"
+
 __author__ = "Emmanuel King Kasulani"
 __email__ = "kasulani@gmail.com"
 __license__ = "Apache-2.0"

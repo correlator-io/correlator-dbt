@@ -171,11 +171,19 @@ jobs:
       - name: Commit and tag version change
         run: |
           NEW_VERSION="${{ needs.check_version.outputs.new_version }}"
-          git add pyproject.toml
-          git commit -m "chore: bump version to $NEW_VERSION [skip ci]"
-          git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
-          git push
-          git push --tags
+
+          # Check if tag already exists (handles re-run after partial failure)
+          if git rev-parse "v$NEW_VERSION" >/dev/null 2>&1; then
+            echo "⚠️ Tag v$NEW_VERSION already exists, skipping commit and tag creation"
+            echo "This is expected if re-running after a partial failure"
+          else
+            git add pyproject.toml
+            git commit -m "chore: bump version to $NEW_VERSION [skip ci]"
+            git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
+            git push
+            git push --tags
+            echo "✅ Created and pushed tag v$NEW_VERSION"
+          fi
 
       - name: Install project dependencies
         run: |
@@ -189,6 +197,25 @@ jobs:
       - name: Build package
         run: make build
 
+      - name: Extract changelog for version
+        run: |
+          NEW_VERSION="${{ needs.check_version.outputs.new_version }}"
+          echo "Extracting changelog for version $NEW_VERSION"
+
+          # Extract the section for this version from CHANGELOG.md
+          # Matches from "## [X.Y.Z]" until the next "## [" or end of file
+          # PR checks enforce changelog entry exists before merge
+          awk -v ver="$NEW_VERSION" '
+            /^## \[/ {
+              if (found) exit
+              if ($0 ~ "\\[" ver "\\]") found=1
+            }
+            found { print }
+          ' CHANGELOG.md > release_notes.md
+
+          echo "Extracted changelog:"
+          cat release_notes.md
+
       - name: Publish to PyPI
         run: |
           uv publish \
@@ -199,8 +226,8 @@ jobs:
         with:
           tag_name: v${{ needs.check_version.outputs.new_version }}
           name: Release v${{ needs.check_version.outputs.new_version }}
+          body_path: release_notes.md
           draft: false
           prerelease: false
-          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
