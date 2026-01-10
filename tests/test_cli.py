@@ -34,12 +34,6 @@ from dbt_correlator.parser import Manifest, RunResults, RunResultsMetadata, Test
 
 
 @pytest.fixture
-def runner() -> CliRunner:
-    """Create Click test runner."""
-    return CliRunner()
-
-
-@pytest.fixture
 def mock_run_results() -> RunResults:
     """Create minimal mock RunResults for testing."""
     return RunResults(
@@ -201,6 +195,7 @@ def cli_mocks(
 # =============================================================================
 
 
+@pytest.mark.unit
 class TestCommandStructure:
     """Tests for CLI command structure and options."""
 
@@ -243,6 +238,7 @@ class TestCommandStructure:
 # =============================================================================
 
 
+@pytest.mark.unit
 class TestExecutionFlow:
     """Tests for dbt test execution flow."""
 
@@ -331,6 +327,7 @@ class TestExecutionFlow:
 # =============================================================================
 
 
+@pytest.mark.unit
 class TestEventGeneration:
     """Tests for OpenLineage event generation."""
 
@@ -411,6 +408,7 @@ class TestEventGeneration:
 # =============================================================================
 
 
+@pytest.mark.unit
 class TestEmission:
     """Tests for event emission to Correlator."""
 
@@ -493,6 +491,7 @@ class TestEmission:
 # =============================================================================
 
 
+@pytest.mark.unit
 class TestExitCodes:
     """Tests for exit code propagation from dbt."""
 
@@ -558,6 +557,7 @@ class TestExitCodes:
 # =============================================================================
 
 
+@pytest.mark.unit
 class TestSkipDbtRun:
     """Tests for --skip-dbt-run flag."""
 
@@ -618,6 +618,7 @@ class TestSkipDbtRun:
 # =============================================================================
 
 
+@pytest.mark.unit
 class TestErrorHandling:
     """Tests for error handling in CLI."""
 
@@ -701,6 +702,7 @@ class TestErrorHandling:
 # =============================================================================
 
 
+@pytest.mark.unit
 class TestConfigFileIntegration:
     """Tests for config file integration with CLI."""
 
@@ -916,6 +918,7 @@ correlator:
 # =============================================================================
 
 
+@pytest.mark.unit
 class TestRunCommand:
     """Tests for 'dbt-correlator run' command."""
 
@@ -1064,6 +1067,7 @@ class TestRunCommand:
 # =============================================================================
 
 
+@pytest.mark.unit
 class TestBuildCommand:
     """Tests for 'dbt-correlator build' command."""
 
@@ -1199,6 +1203,7 @@ class TestBuildCommand:
 # =============================================================================
 
 
+@pytest.mark.unit
 class TestCLIShowsAllCommands:
     """Tests to verify all commands are visible in CLI help."""
 
@@ -1217,6 +1222,7 @@ class TestCLIShowsAllCommands:
 # =============================================================================
 
 
+@pytest.mark.unit
 class TestDynamicJobName:
     """Tests for dynamic job name feature (dbt-ol compatible)."""
 
@@ -1292,7 +1298,8 @@ class TestDynamicJobName:
 # =============================================================================
 
 
-class TestDbtOlEnvVarCompatibility:
+@pytest.mark.unit
+class TestOpenLineageEnvVarCompatibility:
     """Tests for dbt-ol compatible environment variable fallbacks.
 
     dbt-correlator supports dbt-ol environment variables as fallbacks
@@ -1457,6 +1464,7 @@ class TestDbtOlEnvVarCompatibility:
 # =============================================================================
 
 
+@pytest.mark.unit
 class TestStartEmissionTiming:
     """Tests to verify START event is emitted before dbt execution."""
 
@@ -1567,6 +1575,7 @@ class TestStartEmissionTiming:
 # =============================================================================
 
 
+@pytest.mark.unit
 class TestTestCommandLineageEmission:
     """Tests for static lineage emission in test command.
 
