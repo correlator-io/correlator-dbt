@@ -1294,7 +1294,7 @@ class TestDynamicJobName:
 
 
 # =============================================================================
-# M. dbt-ol Environment Variable Compatibility Tests
+# M. OpenLineage Environment Variable Compatibility Tests
 # =============================================================================
 
 
