@@ -147,6 +147,7 @@ def create_wrapping_event(
 def group_tests_by_dataset(
     run_results: RunResults,
     manifest: Manifest,
+    namespace_override: Optional[str] = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Group test results by their target dataset.
 
@@ -162,6 +163,8 @@ def group_tests_by_dataset(
     Args:
         run_results: Parsed dbt run_results.json.
         manifest: Parsed dbt manifest.json.
+        namespace_override: Optional namespace override for datasets.
+            When provided, overrides the manifest-derived namespace.
 
     Returns:
         Dictionary mapping dataset key to list of test results.
@@ -194,7 +197,7 @@ def group_tests_by_dataset(
         # Resolve test to model, then build dataset info
         try:
             model_node = resolve_test_to_model_node(test_node, manifest)
-            dataset_info = build_dataset_info(model_node, manifest)
+            dataset_info = build_dataset_info(model_node, manifest, namespace_override)
             # Use pipe separator to avoid conflicts with "://" in namespace URLs
             dataset_key = f"{dataset_info.namespace}|{dataset_info.name}"
         except (KeyError, ValueError) as e:
@@ -227,6 +230,7 @@ def construct_test_events(
     job_namespace: str,
     job_name: str,
     run_id: str,
+    namespace_override: Optional[str] = None,
 ) -> list[RunEvent]:
     """Construct OpenLineage RUNNING events with dataQualityAssertions facets.
 
@@ -234,12 +238,19 @@ def construct_test_events(
     embedded in the dataQualityAssertions facet. Events use RUNNING state
     (not COMPLETE) because they are intermediate data carriers.
 
+    Each test event has a unique job name (job_name + dataset_name) to ensure
+    unique idempotency keys in Correlator. This prevents events from being
+    treated as duplicates when multiple datasets have tests.
+
     Args:
         run_results: Parsed dbt run_results.json.
         manifest: Parsed dbt manifest.json.
         job_namespace: OpenLineage job namespace (e.g., "dbt", "production").
-        job_name: Job name for OpenLineage job (e.g., "dbt_test").
+        job_name: Base job name for OpenLineage job (e.g., "jaffle_shop.test").
+            The dataset name is appended to create unique job names per dataset.
         run_id: Unique run identifier to link with wrapping events.
+        namespace_override: Optional namespace override for datasets.
+            When provided, overrides the manifest-derived namespace.
 
     Returns:
         List of OpenLineage RunEvents (eventType=RUNNING) with
@@ -247,19 +258,19 @@ def construct_test_events(
 
     Example:
         >>> events = construct_test_events(
-        ...     run_results, manifest, "dbt", "dbt_test", run_id
+        ...     run_results, manifest, "dbt", "jaffle_shop.test", run_id
         ... )
         >>> len(events)
-        13  # One event per dataset with tests
-        >>> events[0].inputs[0].facets["dataQualityAssertions"]
-        DataQualityAssertionsDatasetFacet(assertions=[...])
+        4  # One event per dataset with tests
+        >>> events[0].job.name
+        'jaffle_shop.test.marts.customers'
 
     Note:
         All events share the same run_id for correlation in Correlator.
         Events use RUNNING state - the terminal state (COMPLETE/FAIL) is
         determined by the wrapping event based on dbt exit code.
     """
-    grouped = group_tests_by_dataset(run_results, manifest)
+    grouped = group_tests_by_dataset(run_results, manifest, namespace_override)
     events = []
 
     for dataset_key, tests in grouped.items():
@@ -298,12 +309,18 @@ def construct_test_events(
             inputFacets={"dataQualityAssertions": dqa_facet},
         )
 
+        # Create unique job name per dataset to avoid idempotency collision.
+        # Without this, all test events would have the same idempotency key
+        # (job.namespace + job.name + run.runId + eventType + eventTime)
+        # and only the first would be stored by Correlator.
+        unique_job_name = f"{job_name}.{dataset_name}"
+
         # Create event
         event = RunEvent(  # type: ignore[call-arg]
             eventType=RunState.RUNNING,
             eventTime=run_results.metadata.generated_at.isoformat(),
             run=Run(runId=run_id),  # type: ignore[call-arg]
-            job=Job(namespace=job_namespace, name=job_name),  # type: ignore[call-arg]
+            job=Job(namespace=job_namespace, name=unique_job_name),  # type: ignore[call-arg]
             producer=PRODUCER,
             inputs=[dataset],
             outputs=[],

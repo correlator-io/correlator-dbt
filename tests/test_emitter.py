@@ -439,7 +439,8 @@ class TestConstructTestEvents:
         assert event.eventType == RunState.RUNNING
         assert event.run.runId == sample_run_results.metadata.invocation_id
         assert event.job.namespace == "dbt"
-        assert event.job.name == "dbt_test_run"
+        # Job name includes dataset name for unique idempotency keys
+        assert event.job.name.startswith("dbt_test_run.")
         assert "correlator-io/dbt-correlator" in event.producer
         assert isinstance(event.inputs, list)
         assert len(event.inputs) > 0  # Should have datasets with tests
@@ -681,7 +682,8 @@ class TestConstructTestEvents:
 
         # Verify custom values used (always RunEvent object)
         assert event.job.namespace == "production"
-        assert event.job.name == "nightly_dbt_tests"
+        # Job name includes dataset name for unique idempotency keys
+        assert event.job.name == "nightly_dbt_tests.main.customers"
 
     def test_serializes_to_json(self, sample_run_results, sample_manifest) -> None:
         """Test that constructed event can be serialized to JSON.

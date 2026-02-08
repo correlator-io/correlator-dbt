@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.1] - 2026-02-05
+## [0.1.1] - 2026-02-08
 
 ### Fixed
 - **Critical:** Fix state transition error when dbt tests fail
@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Previously, Correlator rejected events with "terminal state is immutable: COMPLETE → FAIL"
   - This prevented test results from being stored when any dbt test failed
   - See OpenLineage Run Cycle spec: https://openlineage.io/docs/spec/run-cycle
+
+- **Critical:** Fix missing dataQualityAssertions for multiple datasets
+  - Test events now use unique job names per dataset (`{job_name}.{dataset_name}`)
+  - Previously, all test events shared the same job name, causing idempotency key collision
+  - Correlator treated subsequent events as duplicates and only stored the first one
+  - Added `namespace_override` parameter to `construct_test_events()` for consistency with lineage events
 
 ## [0.1.0] - 2026-01-06
 

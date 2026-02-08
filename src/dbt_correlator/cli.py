@@ -435,6 +435,7 @@ def execute_workflow(config: WorkflowConfig) -> int:  # noqa: PLR0912, PLR0915
             job_namespace=config.job_namespace,
             job_name=job_name,
             run_id=run_id,
+            namespace_override=config.dataset_namespace,
         )
 
     # 10. Create terminal event (COMPLETE or FAIL)
