@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-02-05
+
+### Fixed
+- **Critical:** Fix state transition error when dbt tests fail
+  - Test and lineage events now use `RUNNING` state instead of `COMPLETE`
+  - `COMPLETE` and `FAIL` are terminal states reserved for wrapping events
+  - Previously, Correlator rejected events with "terminal state is immutable: COMPLETE → FAIL"
+  - This prevented test results from being stored when any dbt test failed
+  - See OpenLineage Run Cycle spec: https://openlineage.io/docs/spec/run-cycle
+
 ## [0.1.0] - 2026-01-06
 
 First functional release of dbt-correlator. This release provides complete
@@ -67,6 +77,7 @@ for automated incident correlation.
 This was a skeleton release for pipeline testing and PyPI name reservation.
 All functionality returned placeholder messages.
 
-[Unreleased]: https://github.com/correlator-io/correlator-dbt/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/correlator-io/correlator-dbt/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/correlator-io/correlator-dbt/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/correlator-io/correlator-dbt/compare/v0.0.1...v0.1.0
 [0.0.1]: https://github.com/correlator-io/correlator-dbt/releases/tag/v0.0.1

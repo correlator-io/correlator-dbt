@@ -412,7 +412,7 @@ class TestConstructTestEvents:
 
         Validates that:
             - Returns RunEvent object (or dict with RunEvent structure)
-            - eventType is "COMPLETE"
+            - eventType is "RUNNING" (intermediate event, not terminal)
             - run.runId matches invocation_id from run_results
             - job namespace and name are set correctly
             - producer is "https://github.com/correlator-io/dbt-correlator/..."
@@ -422,6 +422,8 @@ class TestConstructTestEvents:
 
         Note:
             Implementation will use openlineage-python client types.
+            Test events use RUNNING state because they are intermediate
+            data carriers, not terminal events.
         """
         events = construct_test_events(
             run_results=sample_run_results,
@@ -433,7 +435,8 @@ class TestConstructTestEvents:
         event = events[0]  # Extract first event for testing
 
         # Check event structure (always RunEvent object)
-        assert event.eventType == RunState.COMPLETE
+        # Test events use RUNNING state (intermediate), not COMPLETE (terminal)
+        assert event.eventType == RunState.RUNNING
         assert event.run.runId == sample_run_results.metadata.invocation_id
         assert event.job.namespace == "dbt"
         assert event.job.name == "dbt_test_run"
@@ -717,6 +720,36 @@ class TestConstructTestEvents:
         assert "outputs" in parsed
         assert "producer" in parsed
         assert "schemaURL" in parsed
+
+    def test_construct_test_events_uses_running_state(
+        self, sample_run_results, sample_manifest
+    ) -> None:
+        """Test that test events use RUNNING state, not COMPLETE.
+
+        RUNNING is the correct state for intermediate events that carry data
+        (like dataQualityAssertions) during a job run. COMPLETE/FAIL are
+        terminal states that should only be used for the final wrapping event.
+
+        This prevents state transition errors in Correlator:
+        "terminal state is immutable: COMPLETE → FAIL"
+
+        Reference:
+            OpenLineage Run Cycle: https://openlineage.io/docs/spec/run-cycle
+        """
+        events = construct_test_events(
+            run_results=sample_run_results,
+            manifest=sample_manifest,
+            job_namespace="dbt",
+            job_name="dbt_test_run",
+            run_id="550e8400-e29b-41d4-a716-446655440000",
+        )
+
+        # All test events should use RUNNING state
+        for event in events:
+            assert event.eventType == RunState.RUNNING, (
+                f"Test events should use RUNNING state, not {event.eventType}. "
+                "COMPLETE/FAIL are terminal states reserved for wrapping events."
+            )
 
 
 # ============================================================================
@@ -1115,15 +1148,20 @@ class TestEmitEventsIntegration:
 class TestConstructLineageEvent:
     """Tests for constructing lineage events for a single model."""
 
-    def test_creates_complete_event(self, sample_model_lineage) -> None:
-        """Test that construct_lineage_event creates valid OpenLineage COMPLETE event.
+    def test_creates_running_event(self, sample_model_lineage) -> None:
+        """Test that construct_lineage_event creates valid OpenLineage RUNNING event.
 
         Validates that:
-            - eventType is COMPLETE
+            - eventType is RUNNING (intermediate event, not terminal)
             - run.runId matches provided run_id
             - job namespace and name are set correctly
             - producer is set to dbt-correlator
             - Event structure is valid OpenLineage RunEvent
+
+        Note:
+            Lineage events use RUNNING state because they are intermediate
+            data carriers. COMPLETE/FAIL are terminal states reserved for
+            wrapping events.
         """
         run_id = "550e8400-e29b-41d4-a716-446655440000"
         event_time = "2024-01-01T12:00:00Z"
@@ -1137,7 +1175,8 @@ class TestConstructLineageEvent:
         )
 
         # Verify event structure
-        assert event.eventType == RunState.COMPLETE
+        # Lineage events use RUNNING state (intermediate), not COMPLETE (terminal)
+        assert event.eventType == RunState.RUNNING
         assert event.run.runId == run_id
         assert event.job.namespace == "dbt"
         assert event.job.name == "model.jaffle_shop.customers"
@@ -1323,6 +1362,33 @@ class TestConstructLineageEvent:
         stats = output["outputFacets"]["outputStatistics"]
         assert stats["rowCount"] == 1500
 
+    def test_construct_lineage_event_uses_running_state(
+        self, sample_model_lineage
+    ) -> None:
+        """Test that lineage events use RUNNING state, not COMPLETE.
+
+        Lineage events are intermediate updates during a job run.
+        The terminal state (COMPLETE/FAIL) is determined by the wrapping event.
+
+        This prevents state transition errors in Correlator:
+        "terminal state is immutable: COMPLETE → FAIL"
+
+        Reference:
+            OpenLineage Run Cycle: https://openlineage.io/docs/spec/run-cycle
+        """
+        event = construct_lineage_event(
+            model_lineage=sample_model_lineage,
+            run_id="550e8400-e29b-41d4-a716-446655440008",
+            job_namespace="dbt",
+            producer="https://test/producer",
+            event_time="2024-01-01T12:00:00Z",
+        )
+
+        assert event.eventType == RunState.RUNNING, (
+            f"Lineage events should use RUNNING state, not {event.eventType}. "
+            "COMPLETE/FAIL are terminal states reserved for wrapping events."
+        )
+
 
 # ============================================================================
 # Tests for construct_lineage_events()
@@ -1444,6 +1510,32 @@ class TestConstructLineageEvents:
         )
 
         assert events == []
+
+    def test_construct_lineage_events_all_use_running_state(
+        self, sample_model_lineages
+    ) -> None:
+        """Test that all lineage events use RUNNING state, not COMPLETE.
+
+        Validates that construct_lineage_events() produces RUNNING events
+        for all models in the batch. Critical for state machine correctness.
+
+        Reference:
+            OpenLineage Run Cycle: https://openlineage.io/docs/spec/run-cycle
+        """
+        events = construct_lineage_events(
+            model_lineages=sample_model_lineages,
+            run_id="550e8400-e29b-41d4-a716-446655440007",
+            job_namespace="dbt",
+            producer="https://test/producer",
+            event_time="2024-01-01T12:00:00Z",
+        )
+
+        # All lineage events should use RUNNING state
+        for event in events:
+            assert event.eventType == RunState.RUNNING, (
+                f"Lineage events should use RUNNING state, not {event.eventType}. "
+                "COMPLETE/FAIL are terminal states reserved for wrapping events."
+            )
 
 
 # ============================================================================
@@ -1602,7 +1694,8 @@ class TestEmitEventsOpenLineageConsumerCompatibility:
 
             # Verify lineage event structure in request body
             event_data = json_data[0]
-            assert event_data["eventType"] == "COMPLETE"
+            # Lineage events use RUNNING state (intermediate), not COMPLETE (terminal)
+            assert event_data["eventType"] == "RUNNING"
             assert len(event_data["outputs"]) == 1
             assert event_data["outputs"][0]["namespace"] == "duckdb://jaffle_shop"
             assert event_data["outputs"][0]["name"] == "main.customers"

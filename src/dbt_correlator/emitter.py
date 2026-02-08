@@ -7,10 +7,16 @@ Event Types:
     1. Test Events (dbt test):
        - dataQualityAssertions facet with test results per dataset
        - Input datasets only (tests validate, don't produce outputs)
+       - eventType=RUNNING (intermediate data carrier)
 
     2. Lineage Events (dbt run/build):
        - Input/output datasets from model dependencies
        - outputStatistics facet with row counts (when available)
+       - eventType=RUNNING (intermediate data carrier)
+
+    3. Wrapping Events:
+       - START: Job begins execution
+       - COMPLETE/FAIL: Terminal state based on dbt exit code
 
 The emitter handles:
     - Creating wrapping events (START/COMPLETE/FAIL)
@@ -22,7 +28,11 @@ The emitter handles:
 
 Architecture:
     Execution integration with wrapping pattern (like dbt-ol):
-    START → [dbt execution] → Model/Test Events → COMPLETE/FAIL → Batch HTTP POST
+    START → [dbt execution] → RUNNING events (data) → COMPLETE/FAIL → Batch HTTP POST
+
+    Note: Intermediate events (test results, lineage) use RUNNING state,
+    not COMPLETE. COMPLETE/FAIL are terminal states reserved for wrapping
+    events that indicate the final job outcome.
 
 OpenLineage Specification:
     - Core spec: https://openlineage.io/docs/spec/object-model
@@ -218,10 +228,11 @@ def construct_test_events(
     job_name: str,
     run_id: str,
 ) -> list[RunEvent]:
-    """Construct OpenLineage test events with dataQualityAssertions facets.
+    """Construct OpenLineage RUNNING events with dataQualityAssertions facets.
 
     Creates one RunEvent per dataset that has tests, with all test results
-    embedded in the dataQualityAssertions facet.
+    embedded in the dataQualityAssertions facet. Events use RUNNING state
+    (not COMPLETE) because they are intermediate data carriers.
 
     Args:
         run_results: Parsed dbt run_results.json.
@@ -231,7 +242,8 @@ def construct_test_events(
         run_id: Unique run identifier to link with wrapping events.
 
     Returns:
-        List of OpenLineage RunEvents with dataQualityAssertions facets.
+        List of OpenLineage RunEvents (eventType=RUNNING) with
+        dataQualityAssertions facets.
 
     Example:
         >>> events = construct_test_events(
@@ -244,7 +256,8 @@ def construct_test_events(
 
     Note:
         All events share the same run_id for correlation in Correlator.
-        Used between START and COMPLETE wrapping events in execution flow.
+        Events use RUNNING state - the terminal state (COMPLETE/FAIL) is
+        determined by the wrapping event based on dbt exit code.
     """
     grouped = group_tests_by_dataset(run_results, manifest)
     events = []
@@ -287,7 +300,7 @@ def construct_test_events(
 
         # Create event
         event = RunEvent(  # type: ignore[call-arg]
-            eventType=RunState.COMPLETE,
+            eventType=RunState.RUNNING,
             eventTime=run_results.metadata.generated_at.isoformat(),
             run=Run(runId=run_id),  # type: ignore[call-arg]
             job=Job(namespace=job_namespace, name=job_name),  # type: ignore[call-arg]
@@ -408,11 +421,12 @@ def construct_lineage_event(
     event_time: str,
     execution_result: Optional[ModelExecutionResult] = None,
 ) -> RunEvent:
-    """Construct OpenLineage COMPLETE event for model lineage.
+    """Construct OpenLineage RUNNING event for model lineage.
 
     Creates a single RunEvent representing a model's execution with its
-    input dependencies and output dataset. Optionally includes runtime
-    metrics (row count) when execution results are available.
+    input dependencies and output dataset. Events use RUNNING state
+    (not COMPLETE) because they are intermediate data carriers. Optionally
+    includes runtime metrics (row count) when execution results are available.
 
     Args:
         model_lineage: Lineage information containing inputs and output.
@@ -424,7 +438,7 @@ def construct_lineage_event(
             When provided, adds outputStatistics facet with row count.
 
     Returns:
-        OpenLineage RunEvent with COMPLETE status, inputs, and output.
+        OpenLineage RunEvent with RUNNING status, inputs, and output.
 
     Example:
         >>> event = construct_lineage_event(
@@ -441,6 +455,8 @@ def construct_lineage_event(
     Note:
         Job name is set to model_lineage.unique_id to identify the model.
         All events should share the same run_id for correlation in Correlator.
+        Events use RUNNING state - the terminal state (COMPLETE/FAIL) is
+        determined by the wrapping event based on dbt exit code.
     """
     # Build input datasets from ModelLineage.inputs
     inputs = [
@@ -467,7 +483,7 @@ def construct_lineage_event(
     )
 
     return RunEvent(  # type: ignore[call-arg]
-        eventType=RunState.COMPLETE,
+        eventType=RunState.RUNNING,
         eventTime=event_time,
         run=Run(runId=run_id),  # type: ignore[call-arg]
         job=Job(namespace=job_namespace, name=model_lineage.unique_id),  # type: ignore[call-arg]
@@ -485,9 +501,10 @@ def construct_lineage_events(
     event_time: str,
     execution_results: Optional[dict[str, ModelExecutionResult]] = None,
 ) -> list[RunEvent]:
-    """Construct lineage events for multiple models.
+    """Construct RUNNING lineage events for multiple models.
 
-    Creates one RunEvent per model with its inputs and output.
+    Creates one RunEvent per model with its inputs and output. Events use
+    RUNNING state (not COMPLETE) because they are intermediate data carriers.
     All events share the same run_id for correlation.
 
     Args:
@@ -501,7 +518,7 @@ def construct_lineage_events(
             will have outputStatistics facet populated.
 
     Returns:
-        List of OpenLineage RunEvents, one per model.
+        List of OpenLineage RunEvents (eventType=RUNNING), one per model.
 
     Example:
         >>> events = construct_lineage_events(
@@ -513,11 +530,13 @@ def construct_lineage_events(
         ...     execution_results=model_results,
         ... )
         >>> len(events)
-        13  # One event per model
+        4  # One event per model
 
     Note:
         Empty model_lineages list returns empty list (no events).
         Used by `run`, `test`, and `build` commands for lineage emission.
+        Events use RUNNING state - the terminal state (COMPLETE/FAIL) is
+        determined by the wrapping event based on dbt exit code.
     """
     events = []
 

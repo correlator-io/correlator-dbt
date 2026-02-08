@@ -273,13 +273,13 @@ class TestEndToEndWithMockServer:
         assert len(mock_correlator_success.calls) == 2, "Expected 2 HTTP calls"
         batch_events = parse_request_body(mock_correlator_success.calls[1].request)
 
-        # Find test events (COMPLETE events with inputs that have dataQualityAssertions)
-        # Note: Test events use COMPLETE type with dataQualityAssertions facets
-        # Lineage events also have inputs but without dataQualityAssertions
+        # Find test events (RUNNING events with inputs that have dataQualityAssertions)
+        # Note: Test events use RUNNING type (intermediate data carrier)
+        # COMPLETE/FAIL are terminal states for wrapping events only
         test_events = [
             e
             for e in batch_events
-            if e.get("eventType") == "COMPLETE"
+            if e.get("eventType") == "RUNNING"
             and e.get("inputs")
             and any(
                 "dataQualityAssertions" in inp.get("inputFacets", {})
@@ -849,12 +849,13 @@ class TestLineageEmission:
         # Get batch events (second call)
         batch_events = parse_request_body(mock_correlator_success.calls[1].request)
 
-        # Find lineage events (COMPLETE events with outputs, excluding terminal)
-        # Lineage events have outputs (the model being built)
+        # Find lineage events (RUNNING events with outputs)
+        # Lineage events use RUNNING type (intermediate data carrier)
+        # They have outputs (the model being built)
         lineage_events = [
             e
             for e in batch_events
-            if e.get("eventType") == "COMPLETE" and e.get("outputs")
+            if e.get("eventType") == "RUNNING" and e.get("outputs")
         ]
 
         assert (

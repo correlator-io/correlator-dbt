@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "correlator-dbt"
-version = "0.1.0"
+version = "0.1.1.dev0"
 description = "dbt plugin that emits OpenLineage events with test results for automated incident correlation"
 readme = "README.md"
 authors = [
