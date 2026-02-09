@@ -165,7 +165,11 @@ def cli_mocks(
         mock_parse_manifest.return_value = mock_manifest
         mock_wrapping.return_value = mock_run_event
         mock_construct.return_value = [mock_run_event]
-        mock_lineage_events.return_value = [mock_run_event]
+        # construct_lineage_events returns (events, model_run_ids) tuple
+        mock_lineage_events.return_value = (
+            [mock_run_event],
+            {"model.my_project.users": "mock-model-run-id"},
+        )
         mock_extract_lineage.return_value = []  # Empty list of ModelLineage
         mock_get_executed.return_value = {"model.my_project.users"}
         mock_extract_model_results.return_value = {}
@@ -1131,10 +1135,14 @@ class TestBuildCommand:
         cli_mocks["construct_lineage"].assert_called_once()
         cli_mocks["construct"].assert_called_once()
 
-    def test_build_command_uses_single_run_id(
+    def test_build_command_passes_model_run_ids_to_test_events(
         self, runner: CliRunner, cli_mocks: dict[str, Any]
     ) -> None:
-        """Test that build command uses same run_id for all events."""
+        """Test that build command passes model_run_ids mapping to test events.
+
+        Bug 4 Fix: For dbt build, test events should share runId with their model
+        via the model_run_ids mapping from construct_lineage_events.
+        """
         runner.invoke(
             cli,
             [
@@ -1144,15 +1152,18 @@ class TestBuildCommand:
             ],
         )
 
-        # Get run_id from construct_lineage_events call
-        lineage_call_kwargs = cli_mocks["construct_lineage"].call_args[1]
-        lineage_run_id = lineage_call_kwargs.get("run_id")
-
-        # Get run_id from construct_test_events call
+        # Verify construct_test_events was called with model_run_ids mapping
         construct_call_kwargs = cli_mocks["construct"].call_args[1]
-        construct_run_id = construct_call_kwargs.get("run_id")
 
-        assert lineage_run_id == construct_run_id, "All events should share same run_id"
+        # model_run_ids should be passed (non-None for dbt build)
+        assert (
+            "model_run_ids" in construct_call_kwargs
+        ), "construct_test_events should receive model_run_ids parameter"
+        model_run_ids = construct_call_kwargs.get("model_run_ids")
+        assert (
+            model_run_ids is not None
+        ), "model_run_ids should be non-None for dbt build (from construct_lineage_events)"
+        assert isinstance(model_run_ids, dict), "model_run_ids should be a dict"
 
     def test_build_command_propagates_exit_code(
         self, runner: CliRunner, cli_mocks: dict[str, Any]

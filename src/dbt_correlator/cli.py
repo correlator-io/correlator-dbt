@@ -22,13 +22,13 @@ using the same patterns as other correlator plugins.
 import os
 import subprocess
 import sys
-import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, Optional
 
 import click
+from uuid6 import uuid7
 
 from . import __version__
 from .config import (
@@ -351,7 +351,10 @@ def execute_workflow(config: WorkflowConfig) -> int:  # noqa: PLR0912, PLR0915
         Emission failures are logged as warnings but don't affect the exit code.
         This ensures lineage is "fire-and-forget" - dbt execution is primary.
     """
-    run_id = str(uuid.uuid4())
+    # UUID7 per OpenLineage spec recommendation (time-ordered)
+    # This is used for wrapping events and as fallback for dbt test command.
+    # Per-model lineage events get unique runIds generated in construct_lineage_events().
+    wrapping_run_id = str(uuid7())
     dbt_exit_code = 0
     manifest = None  # Will be parsed once and reused
 
@@ -367,7 +370,7 @@ def execute_workflow(config: WorkflowConfig) -> int:  # noqa: PLR0912, PLR0915
     # 2. Create and emit START event immediately
     start_timestamp = datetime.now(timezone.utc)
     start_event = create_wrapping_event(
-        "START", run_id, job_name, config.job_namespace, start_timestamp
+        "START", wrapping_run_id, job_name, config.job_namespace, start_timestamp
     )
     try:
         emit_events([start_event], config.endpoint, config.api_key)
@@ -401,6 +404,7 @@ def execute_workflow(config: WorkflowConfig) -> int:  # noqa: PLR0912, PLR0915
     # Test command only emits test events - tests validate inputs, don't produce outputs
     lineage_events: list[Any] = []
     model_ids: set[str] = set()
+    model_run_ids: dict[str, str] = {}  # Mapping: model_unique_id -> runId
     if config.emit_lineage_events:
         # Determine which models to emit lineage for
         model_ids = get_executed_models(run_results)
@@ -417,11 +421,10 @@ def execute_workflow(config: WorkflowConfig) -> int:  # noqa: PLR0912, PLR0915
         if config.include_runtime_metrics:
             execution_results = extract_model_results(run_results)
 
-        # Construct lineage events
+        # Construct lineage events (each model gets unique runId)
         event_time = datetime.now(timezone.utc).isoformat()
-        lineage_events = construct_lineage_events(
+        lineage_events, model_run_ids = construct_lineage_events(
             model_lineages=model_lineages,
-            run_id=run_id,
             job_namespace=config.job_namespace,
             producer=PRODUCER,
             event_time=event_time,
@@ -429,6 +432,8 @@ def execute_workflow(config: WorkflowConfig) -> int:  # noqa: PLR0912, PLR0915
         )
 
     # 9. Construct test events (only for test/build commands)
+    # For dbt build: tests share runId with their model (via model_run_ids mapping)
+    # For dbt test: tests use wrapping_run_id as fallback (single shared runId)
     test_events: list[Any] = []
     if config.emit_test_events:
         test_events = construct_test_events(
@@ -436,15 +441,20 @@ def execute_workflow(config: WorkflowConfig) -> int:  # noqa: PLR0912, PLR0915
             manifest=manifest,
             job_namespace=config.job_namespace,
             job_name=job_name,
-            run_id=run_id,
+            run_id=wrapping_run_id,
             namespace_override=config.dataset_namespace,
+            model_run_ids=model_run_ids if model_run_ids else None,
         )
 
     # 10. Create terminal event (COMPLETE or FAIL)
     terminal_timestamp = datetime.now(timezone.utc)
     terminal_type = "COMPLETE" if dbt_exit_code == 0 else "FAIL"
     terminal_event = create_wrapping_event(
-        terminal_type, run_id, job_name, config.job_namespace, terminal_timestamp
+        terminal_type,
+        wrapping_run_id,
+        job_name,
+        config.job_namespace,
+        terminal_timestamp,
     )
 
     # 11. Batch emit all events: lineage + tests (if any) + terminal

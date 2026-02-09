@@ -1405,13 +1405,12 @@ class TestConstructLineageEvents:
         """Test that construct_lineage_events creates one event per model.
 
         Validates that:
-            - Returns list of RunEvents
+            - Returns tuple of (events, model_run_ids mapping)
             - Event count matches input model count
             - Each event corresponds to a model from input list
         """
-        events = construct_lineage_events(
+        events, model_run_ids = construct_lineage_events(
             model_lineages=sample_model_lineages,
-            run_id="550e8400-e29b-41d4-a716-446655440003",
             job_namespace="dbt",
             producer="https://test/producer",
             event_time="2024-01-01T12:00:00Z",
@@ -1425,26 +1424,43 @@ class TestConstructLineageEvents:
         assert "model.jaffle_shop.stg_customers" in job_names
         assert "model.jaffle_shop.customers" in job_names
 
-    def test_all_share_same_run_id(self, sample_model_lineages) -> None:
-        """Test that all lineage events share the same run_id.
+        # Verify model_run_ids mapping returned
+        assert len(model_run_ids) == 2
+        assert "model.jaffle_shop.stg_customers" in model_run_ids
+        assert "model.jaffle_shop.customers" in model_run_ids
+
+    def test_each_model_gets_unique_run_id(self, sample_model_lineages) -> None:
+        """Test that each model gets a UNIQUE runId (Bug 4 fix).
 
         Validates that:
-            - All events have identical run.runId
-            - Critical for correlation in Correlator
-        """
-        run_id = "550e8400-e29b-41d4-a716-446655440004"
+            - Each model event has a different runId
+            - Prevents Correlator from aggregating events into self-referential loops
 
-        events = construct_lineage_events(
+        Bug 4 Fix:
+            Previously all events shared a single runId. Correlator aggregates
+            by runId, creating loops when the same dataset appears as both
+            input and output across different models.
+        """
+        events, model_run_ids = construct_lineage_events(
             model_lineages=sample_model_lineages,
-            run_id=run_id,
             job_namespace="dbt",
             producer="https://test/producer",
             event_time="2024-01-01T12:00:00Z",
         )
 
-        # All events should share the same runId
+        # Collect all runIds from events
+        run_ids = {event.run.runId for event in events}
+
+        # Each model should have a unique runId
+        assert len(run_ids) == len(events), (
+            "Each model must have a unique runId to prevent Correlator aggregation. "
+            f"Found {len(run_ids)} unique runIds for {len(events)} events."
+        )
+
+        # Verify model_run_ids mapping matches event runIds
         for event in events:
-            assert event.run.runId == run_id
+            model_unique_id = event.job.name
+            assert event.run.runId == model_run_ids[model_unique_id]
 
     def test_with_execution_results(self, sample_model_lineages) -> None:
         """Test that execution results are matched to correct models.
@@ -1465,9 +1481,8 @@ class TestConstructLineageEvents:
             )
         }
 
-        events = construct_lineage_events(
+        events, _model_run_ids = construct_lineage_events(
             model_lineages=sample_model_lineages,
-            run_id="550e8400-e29b-41d4-a716-446655440002",
             job_namespace="dbt",
             producer="https://test/producer",
             event_time="2024-01-01T12:00:00Z",
@@ -1496,22 +1511,22 @@ class TestConstructLineageEvents:
         )
 
     def test_empty_list(self) -> None:
-        """Test that empty model list returns empty event list.
+        """Test that empty model list returns empty event list and empty mapping.
 
         Validates that:
-            - Empty input returns empty output
+            - Empty input returns empty output and empty mapping
             - No errors raised
             - Handles gracefully
         """
-        events = construct_lineage_events(
+        events, model_run_ids = construct_lineage_events(
             model_lineages=[],
-            run_id="550e8400-e29b-41d4-a716-446655440002",
             job_namespace="dbt",
             producer="https://test/producer",
             event_time="2024-01-01T12:00:00Z",
         )
 
         assert events == []
+        assert model_run_ids == {}
 
     def test_construct_lineage_events_all_use_running_state(
         self, sample_model_lineages
@@ -1524,9 +1539,8 @@ class TestConstructLineageEvents:
         Reference:
             OpenLineage Run Cycle: https://openlineage.io/docs/spec/run-cycle
         """
-        events = construct_lineage_events(
+        events, _ = construct_lineage_events(
             model_lineages=sample_model_lineages,
-            run_id="550e8400-e29b-41d4-a716-446655440007",
             job_namespace="dbt",
             producer="https://test/producer",
             event_time="2024-01-01T12:00:00Z",

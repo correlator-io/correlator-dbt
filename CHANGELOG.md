@@ -7,9 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.1] - 2026-02-08
+## [0.1.1] - 2026-02-09
 
 ### Fixed
+- **Critical:** Fix self-referential loops in downstream impact analysis
+  - Each model lineage event now gets a unique `runId` instead of sharing one
+  - Previously, Correlator aggregated all events by `runId`, creating loops when the
+    same dataset appeared as both input (dependency) and output (producer)
+  - For `dbt build`: test events now share `runId` with their corresponding model
+  - For `dbt test`: test events continue to use a single shared `runId` (unchanged)
+  - `construct_lineage_events()` now returns `(events, model_run_ids)` tuple
+  - `construct_test_events()` accepts optional `model_run_ids` mapping for correlation
+  - Now uses UUID7 (time-ordered) per OpenLineage spec recommendation
+
+- **Critical:** Add seed support for complete lineage chains
+  - Seeds (e.g., `seed.jaffle_shop.raw_customers`) are now included as inputs
+  - Previously, seeds were skipped in `extract_model_inputs()`, causing staging
+    models to have empty inputs and breaking the lineage chain
+  - Seeds are looked up in `manifest.nodes` (same as models)
+
 - **Critical:** Fix state transition error when dbt tests fail
   - Test and lineage events now use `RUNNING` state instead of `COMPLETE`
   - `COMPLETE` and `FAIL` are terminal states reserved for wrapping events

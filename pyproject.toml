@@ -43,6 +43,7 @@ dependencies = [
     "click>=8.1.0",
     "requests>=2.28.0",
     "PyYAML>=6.0",
+    "uuid6>=2024.1.12",  # UUID7 support per OpenLineage spec recommendation
 ]
 
 [project.license]

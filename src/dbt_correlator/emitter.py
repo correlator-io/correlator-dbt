@@ -63,6 +63,7 @@ from openlineage.client.generated.data_quality_assertions_dataset import (
 from openlineage.client.generated.output_statistics_output_dataset import (
     OutputStatisticsOutputDatasetFacet,
 )
+from uuid6 import uuid7
 
 from . import __version__
 from .parser import (
@@ -197,6 +198,7 @@ def group_tests_by_dataset(
         # Resolve test to model, then build dataset info
         try:
             model_node = resolve_test_to_model_node(test_node, manifest)
+            model_unique_id = model_node.get("unique_id", "")
             dataset_info = build_dataset_info(model_node, manifest, namespace_override)
             # Use pipe separator to avoid conflicts with "://" in namespace URLs
             dataset_key = f"{dataset_info.namespace}|{dataset_info.name}"
@@ -218,6 +220,7 @@ def group_tests_by_dataset(
                 "message": result.message,
                 "test_name": test_name,
                 "column_name": column_name,
+                "model_unique_id": model_unique_id,
             }
         )
 
@@ -231,6 +234,7 @@ def construct_test_events(
     job_name: str,
     run_id: str,
     namespace_override: Optional[str] = None,
+    model_run_ids: Optional[dict[str, str]] = None,
 ) -> list[RunEvent]:
     """Construct OpenLineage RUNNING events with dataQualityAssertions facets.
 
@@ -248,9 +252,13 @@ def construct_test_events(
         job_namespace: OpenLineage job namespace (e.g., "dbt", "production").
         job_name: Base job name for OpenLineage job (e.g., "jaffle_shop.test").
             The dataset name is appended to create unique job names per dataset.
-        run_id: Unique run identifier to link with wrapping events.
+        run_id: Fallback run identifier when model_run_ids is not provided.
+            Used for `dbt test` alone (single shared runId for all test events).
         namespace_override: Optional namespace override for datasets.
             When provided, overrides the manifest-derived namespace.
+        model_run_ids: Optional mapping of model_unique_id -> runId.
+            For `dbt build`: test events share runId with their model.
+            For `dbt test`: not provided, uses fallback run_id.
 
     Returns:
         List of OpenLineage RunEvents (eventType=RUNNING) with
@@ -266,7 +274,8 @@ def construct_test_events(
         'jaffle_shop.test.marts.customers'
 
     Note:
-        All events share the same run_id for correlation in Correlator.
+        For `dbt test`: All events share the same run_id (fallback).
+        For `dbt build`: Test events share runId with the model they test.
         Events use RUNNING state - the terminal state (COMPLETE/FAIL) is
         determined by the wrapping event based on dbt exit code.
     """
@@ -280,6 +289,16 @@ def construct_test_events(
         except ValueError:
             logger.warning(f"Invalid dataset key format: {dataset_key}")
             continue
+
+        # Determine runId for this test event
+        # For dbt build: use the model's runId from model_run_ids mapping
+        # For dbt test: use the fallback run_id (single shared runId)
+        event_run_id = run_id  # Default fallback
+        if model_run_ids and tests:
+            # Get model_unique_id from first test (all tests in group are for same model)
+            model_unique_id = tests[0].get("model_unique_id", "")
+            if model_unique_id and model_unique_id in model_run_ids:
+                event_run_id = model_run_ids[model_unique_id]
 
         # Build assertions from test results
         assertions = []
@@ -319,7 +338,7 @@ def construct_test_events(
         event = RunEvent(  # type: ignore[call-arg]
             eventType=RunState.RUNNING,
             eventTime=run_results.metadata.generated_at.isoformat(),
-            run=Run(runId=run_id),  # type: ignore[call-arg]
+            run=Run(runId=event_run_id),  # type: ignore[call-arg]
             job=Job(namespace=job_namespace, name=unique_job_name),  # type: ignore[call-arg]
             producer=PRODUCER,
             inputs=[dataset],
@@ -471,7 +490,8 @@ def construct_lineage_event(
 
     Note:
         Job name is set to model_lineage.unique_id to identify the model.
-        All events should share the same run_id for correlation in Correlator.
+        Each model gets a unique run_id to prevent Correlator from aggregating
+        events into self-referential loops (Bug 4 fix).
         Events use RUNNING state - the terminal state (COMPLETE/FAIL) is
         determined by the wrapping event based on dbt exit code.
     """
@@ -512,21 +532,20 @@ def construct_lineage_event(
 
 def construct_lineage_events(
     model_lineages: list[ModelLineage],
-    run_id: str,
     job_namespace: str,
     producer: str,
     event_time: str,
     execution_results: Optional[dict[str, ModelExecutionResult]] = None,
-) -> list[RunEvent]:
-    """Construct RUNNING lineage events for multiple models.
+) -> tuple[list[RunEvent], dict[str, str]]:
+    """Construct RUNNING lineage events for multiple models with unique runIds.
 
     Creates one RunEvent per model with its inputs and output. Events use
     RUNNING state (not COMPLETE) because they are intermediate data carriers.
-    All events share the same run_id for correlation.
+    Each model gets a unique runId to prevent Correlator from aggregating
+    them into a single job_run_id (which would create self-referential loops).
 
     Args:
         model_lineages: List of ModelLineage objects to construct events for.
-        run_id: Unique run identifier shared by all events.
         job_namespace: OpenLineage namespace (e.g., "dbt").
         producer: Producer URL for OpenLineage events.
         event_time: ISO 8601 timestamp for all events.
@@ -535,12 +554,13 @@ def construct_lineage_events(
             will have outputStatistics facet populated.
 
     Returns:
-        List of OpenLineage RunEvents (eventType=RUNNING), one per model.
+        Tuple of:
+            - List of OpenLineage RunEvents (eventType=RUNNING), one per model
+            - Dict mapping model unique_id to its runId (for test event correlation)
 
     Example:
-        >>> events = construct_lineage_events(
+        >>> events, model_run_ids = construct_lineage_events(
         ...     model_lineages=lineages,
-        ...     run_id="batch-run-id",
         ...     job_namespace="dbt",
         ...     producer="https://github.com/correlator-io/dbt-correlator/0.1.0",
         ...     event_time="2024-01-01T12:00:00Z",
@@ -548,16 +568,29 @@ def construct_lineage_events(
         ... )
         >>> len(events)
         4  # One event per model
+        >>> len(model_run_ids)
+        4  # Mapping of model_unique_id -> runId
 
     Note:
-        Empty model_lineages list returns empty list (no events).
-        Used by `run`, `test`, and `build` commands for lineage emission.
+        Empty model_lineages list returns empty list and empty dict.
+        Used by `run` and `build` commands for lineage emission.
         Events use RUNNING state - the terminal state (COMPLETE/FAIL) is
         determined by the wrapping event based on dbt exit code.
+
+    Bug 4 Fix:
+        Previously all events shared a single runId. Correlator aggregates
+        by runId, creating self-referential loops when the same dataset
+        appears as both input (dependency) and output (producer) across
+        different models. Unique runIds per model prevent this aggregation.
     """
     events = []
+    model_run_ids: dict[str, str] = {}
 
     for lineage in model_lineages:
+        # Generate unique runId for this model (UUID7 per OpenLineage spec)
+        model_run_id = str(uuid7())
+        model_run_ids[lineage.unique_id] = model_run_id
+
         # Get execution result for this model if available
         exec_result = None
         if execution_results:
@@ -565,7 +598,7 @@ def construct_lineage_events(
 
         event = construct_lineage_event(
             model_lineage=lineage,
-            run_id=run_id,
+            run_id=model_run_id,
             job_namespace=job_namespace,
             producer=producer,
             event_time=event_time,
@@ -573,4 +606,4 @@ def construct_lineage_events(
         )
         events.append(event)
 
-    return events
+    return events, model_run_ids
