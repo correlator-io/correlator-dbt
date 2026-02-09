@@ -49,7 +49,6 @@ from .parser import (
     extract_all_model_lineage,
     extract_model_results,
     get_executed_models,
-    get_models_with_tests,
     parse_manifest,
     parse_run_results,
 )
@@ -101,6 +100,7 @@ class WorkflowConfig:
 
     # Workflow-specific flags derived from command type
     emit_test_events: bool = False
+    emit_lineage_events: bool = False
     include_runtime_metrics: bool = False
 
     @classmethod
@@ -118,8 +118,8 @@ class WorkflowConfig:
     ) -> "WorkflowConfig":
         """Create configuration for dbt test workflow.
 
-        Test workflow: emits test events, no runtime metrics.
-        Uses get_models_with_tests() to filter models.
+        Test workflow: emits test events only, no lineage events or runtime metrics.
+        Tests validate existing data - they don't produce outputs.
         """
         return cls(
             command="test",
@@ -133,6 +133,7 @@ class WorkflowConfig:
             skip_dbt_run=skip_dbt_run,
             dbt_args=dbt_args,
             emit_test_events=True,
+            emit_lineage_events=False,
             include_runtime_metrics=False,
         )
 
@@ -151,7 +152,7 @@ class WorkflowConfig:
     ) -> "WorkflowConfig":
         """Create configuration for dbt run workflow.
 
-        Run workflow: emits runtime metrics, no test events.
+        Run workflow: emits lineage events with runtime metrics, no test events.
         Uses get_executed_models() to filter models.
         """
         return cls(
@@ -166,6 +167,7 @@ class WorkflowConfig:
             skip_dbt_run=skip_dbt_run,
             dbt_args=dbt_args,
             emit_test_events=False,
+            emit_lineage_events=True,
             include_runtime_metrics=True,
         )
 
@@ -184,7 +186,7 @@ class WorkflowConfig:
     ) -> "WorkflowConfig":
         """Create configuration for dbt build workflow.
 
-        Build workflow: emits both test events AND runtime metrics.
+        Build workflow: emits both lineage events AND test events with runtime metrics.
         Uses get_executed_models() to filter models.
         Single runId shared across all events for better correlation.
         """
@@ -200,6 +202,7 @@ class WorkflowConfig:
             skip_dbt_run=skip_dbt_run,
             dbt_args=dbt_args,
             emit_test_events=True,
+            emit_lineage_events=True,
             include_runtime_metrics=True,
         )
 
@@ -329,13 +332,12 @@ def execute_workflow(config: WorkflowConfig) -> int:  # noqa: PLR0912, PLR0915
     2. Emits START wrapping event immediately
     3. Runs dbt command (unless skip_dbt_run)
     4. Parses dbt artifacts
-    5. Extracts model lineage (filtered by command type)
-    6. Optionally extracts runtime metrics (run/build only)
-    7. Constructs lineage events
-    8. Optionally constructs test events (test/build only)
-    9. Creates terminal event (COMPLETE/FAIL)
-    10. Batch emits all events to OpenLineage backend
-    11. Returns dbt exit code
+    5-8. Optionally constructs lineage events (run/build only)
+         - Test command skips lineage: tests validate inputs, don't produce outputs
+    9. Optionally constructs test events (test/build only)
+    10. Creates terminal event (COMPLETE/FAIL)
+    11. Batch emits all events to OpenLineage backend
+    12. Returns dbt exit code
 
     Args:
         config: WorkflowConfig with all workflow parameters.
@@ -395,36 +397,36 @@ def execute_workflow(config: WorkflowConfig) -> int:  # noqa: PLR0912, PLR0915
         click.echo(f"Error: {e}", err=True)
         return 1
 
-    # 5. Determine which models to emit lineage for
-    # test command: only models that have tests executed
-    # run/build commands: only models that were executed
-    if config.command == "test":
-        model_ids = get_models_with_tests(run_results, manifest)
-    else:
+    # 5-8. Construct lineage events (only for run/build commands)
+    # Test command only emits test events - tests validate inputs, don't produce outputs
+    lineage_events: list[Any] = []
+    model_ids: set[str] = set()
+    if config.emit_lineage_events:
+        # Determine which models to emit lineage for
         model_ids = get_executed_models(run_results)
 
-    # 6. Extract model lineage for filtered models
-    model_lineages = extract_all_model_lineage(
-        manifest,
-        model_ids=model_ids,
-        namespace_override=config.dataset_namespace,
-    )
+        # Extract model lineage for executed models
+        model_lineages = extract_all_model_lineage(
+            manifest,
+            model_ids=model_ids,
+            namespace_override=config.dataset_namespace,
+        )
 
-    # 7. Extract runtime metrics (only for run/build commands)
-    execution_results = None
-    if config.include_runtime_metrics:
-        execution_results = extract_model_results(run_results)
+        # Extract runtime metrics (only for run/build commands)
+        execution_results = None
+        if config.include_runtime_metrics:
+            execution_results = extract_model_results(run_results)
 
-    # 8. Construct lineage events
-    event_time = datetime.now(timezone.utc).isoformat()
-    lineage_events = construct_lineage_events(
-        model_lineages=model_lineages,
-        run_id=run_id,
-        job_namespace=config.job_namespace,
-        producer=PRODUCER,
-        event_time=event_time,
-        execution_results=execution_results,
-    )
+        # Construct lineage events
+        event_time = datetime.now(timezone.utc).isoformat()
+        lineage_events = construct_lineage_events(
+            model_lineages=model_lineages,
+            run_id=run_id,
+            job_namespace=config.job_namespace,
+            producer=PRODUCER,
+            event_time=event_time,
+            execution_results=execution_results,
+        )
 
     # 9. Construct test events (only for test/build commands)
     test_events: list[Any] = []
@@ -451,11 +453,17 @@ def execute_workflow(config: WorkflowConfig) -> int:  # noqa: PLR0912, PLR0915
     try:
         emit_events(all_events, config.endpoint, config.api_key)
         # Build success message based on what was emitted
-        parts = [f"{len(lineage_events)} lineage events"]
+        parts = []
+        if lineage_events:
+            parts.append(f"{len(lineage_events)} lineage events")
         if test_events:
             parts.append(f"{len(test_events)} test events")
         parts.append("terminal event")
-        click.echo(f"Emitted {' + '.join(parts)} ({len(model_ids)} models)")
+        # Include model count for lineage, or just event summary for test-only
+        if model_ids:
+            click.echo(f"Emitted {' + '.join(parts)} ({len(model_ids)} models)")
+        else:
+            click.echo(f"Emitted {' + '.join(parts)}")
     except (ConnectionError, TimeoutError, ValueError) as e:
         click.echo(f"Warning: Failed to emit events: {e}", err=True)
         # Don't fail - lineage is fire-and-forget

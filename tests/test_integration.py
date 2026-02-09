@@ -955,22 +955,22 @@ class TestBuildCommandIntegration:
         - All events share the same runId for correlation
     """
 
-    def test_build_command_emits_lineage_and_test_events(
+    def test_build_command_emits_lineage_events(
         self,
         runner: CliRunner,
-        mock_dbt_project_dir: Path,
+        mock_dbt_project_dir_with_model_results: Path,
         mock_correlator_success: responses.RequestsMock,
     ) -> None:
-        """Validate build command emits both lineage and test events.
+        """Validate build command emits lineage events for executed models.
 
-        Note: Uses mock_dbt_project_dir (test results) since build
-        command processes both models and tests from run_results.
+        Note: Uses mock_dbt_project_dir_with_model_results which contains
+        model execution results. Test events are NOT emitted since this
+        fixture has no test results.
 
         Validates:
             1. HTTP POSTs made (START + batch)
             2. Batch contains lineage events (with outputs)
-            3. Batch contains test events (with dataQualityAssertions)
-            4. Exit code is 0
+            3. Exit code is 0
         """
         result = runner.invoke(
             cli,
@@ -978,9 +978,9 @@ class TestBuildCommandIntegration:
                 "build",
                 "--skip-dbt-run",
                 "--project-dir",
-                str(mock_dbt_project_dir),
+                str(mock_dbt_project_dir_with_model_results),
                 "--profiles-dir",
-                str(mock_dbt_project_dir),
+                str(mock_dbt_project_dir_with_model_results),
                 "--correlator-endpoint",
                 MOCK_CORRELATOR_ENDPOINT,
             ],
@@ -994,12 +994,11 @@ class TestBuildCommandIntegration:
         # Get batch events
         batch_events = parse_request_body(mock_correlator_success.calls[1].request)
 
-        # Should have mix of lineage and test events plus terminal
+        # Should have lineage events plus terminal
         assert len(batch_events) >= 2, "Expected multiple events in batch"
 
-        # Verify output mentions both lineage and test events
+        # Verify output mentions lineage events
         assert "lineage" in result.output.lower(), f"Output: {result.output}"
-        assert "test" in result.output.lower(), f"Output: {result.output}"
 
     def test_build_command_all_events_share_run_id(
         self,

@@ -23,6 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Correlator treated subsequent events as duplicates and only stored the first one
   - Added `namespace_override` parameter to `construct_test_events()` for consistency with lineage events
 
+- **Critical:** Fix test command emitting spurious lineage events with outputs
+  - `dbt test` command now only emits test events (dataQualityAssertions)
+  - Previously, test command also emitted lineage events with populated `outputs` array
+  - This caused self-referential loops in Correlator's `lineage_impact_analysis` view
+  - Tests validate existing data (inputs only) - they don't produce outputs
+  - Added `emit_lineage_events` flag to `WorkflowConfig` for command-specific control
+
 ## [0.1.0] - 2026-01-06
 
 First functional release of dbt-correlator. This release provides complete

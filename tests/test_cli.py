@@ -157,7 +157,6 @@ def cli_mocks(
         patch("dbt_correlator.cli.parse_run_results") as mock_parse_results,
         patch("dbt_correlator.cli.extract_all_model_lineage") as mock_extract_lineage,
         patch("dbt_correlator.cli.get_executed_models") as mock_get_executed,
-        patch("dbt_correlator.cli.get_models_with_tests") as mock_get_models_with_tests,
         patch("dbt_correlator.cli.extract_model_results") as mock_extract_model_results,
     ):
         # Set default return values
@@ -169,7 +168,6 @@ def cli_mocks(
         mock_lineage_events.return_value = [mock_run_event]
         mock_extract_lineage.return_value = []  # Empty list of ModelLineage
         mock_get_executed.return_value = {"model.my_project.users"}
-        mock_get_models_with_tests.return_value = {"model.my_project.users"}
         mock_extract_model_results.return_value = {}
 
         yield {
@@ -182,7 +180,6 @@ def cli_mocks(
             "parse_results": mock_parse_results,
             "extract_lineage": mock_extract_lineage,
             "get_executed": mock_get_executed,
-            "get_models_with_tests": mock_get_models_with_tests,
             "extract_model_results": mock_extract_model_results,
             "run_results": mock_run_results,
             "manifest": mock_manifest,
@@ -459,13 +456,14 @@ class TestEmission:
 
         Test command emits:
         1. START event immediately (1 event)
-        2. lineage (1) + test events (2) + terminal (1) = 4 events in batch
+        2. test events (2) + terminal (1) = 3 events in batch
+           (no lineage events - tests validate inputs, don't produce outputs)
         """
         cli_mocks["construct"].return_value = [
             cli_mocks["run_event"],
             cli_mocks["run_event"],
         ]
-        cli_mocks["construct_lineage"].return_value = [cli_mocks["run_event"]]
+        # Note: construct_lineage is NOT called for test command
 
         runner.invoke(
             cli,
@@ -481,9 +479,9 @@ class TestEmission:
         # First call: START event only
         start_events = cli_mocks["emit"].call_args_list[0][0][0]
         assert len(start_events) == 1
-        # Second call: lineage (1) + test events (2) + terminal (1) = 4 events
+        # Second call: test events (2) + terminal (1) = 3 events (no lineage)
         batch_events = cli_mocks["emit"].call_args_list[1][0][0]
-        assert len(batch_events) == 4
+        assert len(batch_events) == 3
 
 
 # =============================================================================
@@ -1571,22 +1569,23 @@ class TestStartEmissionTiming:
 
 
 # =============================================================================
-# O. Test Command Static Lineage Emission Tests
+# O. Test Command Does NOT Emit Lineage (Only Test Events)
 # =============================================================================
 
 
 @pytest.mark.unit
-class TestTestCommandLineageEmission:
-    """Tests for static lineage emission in test command.
+class TestTestCommandNoLineageEmission:
+    """Tests verifying test command does NOT emit lineage events.
 
-    The test command emits static lineage for models that have executed tests.
-    This enables correlation between test failures and model lineage.
+    Tests validate existing data (inputs only) - they don't produce outputs.
+    Emitting lineage events with outputs for test command creates spurious
+    edges in Correlator's lineage_impact_analysis view.
     """
 
-    def test_test_command_calls_get_models_with_tests(
+    def test_test_command_does_not_call_extract_lineage(
         self, runner: CliRunner, cli_mocks: dict[str, Any]
     ) -> None:
-        """Test that test command calls get_models_with_tests to filter models."""
+        """Test that test command does NOT extract model lineage."""
         runner.invoke(
             cli,
             [
@@ -1596,22 +1595,32 @@ class TestTestCommandLineageEmission:
             ],
         )
 
-        # Verify get_models_with_tests was called
-        cli_mocks["get_models_with_tests"].assert_called_once()
+        # extract_all_model_lineage should NOT be called for test command
+        cli_mocks["extract_lineage"].assert_not_called()
 
-    def test_test_command_passes_model_filter_to_extract_lineage(
+    def test_test_command_does_not_call_construct_lineage_events(
         self, runner: CliRunner, cli_mocks: dict[str, Any]
     ) -> None:
-        """Test that test command passes model filter to extract_all_model_lineage.
+        """Test that test command does NOT construct lineage events."""
+        runner.invoke(
+            cli,
+            [
+                "test",
+                "--correlator-endpoint",
+                "http://localhost:8080/api/v1/lineage/events",
+            ],
+        )
 
-        Only models with executed tests should have lineage extracted.
-        This is important when using --select to run specific tests.
+        # construct_lineage_events should NOT be called for test command
+        cli_mocks["construct_lineage"].assert_not_called()
+
+    def test_test_command_does_not_call_get_executed_models(
+        self, runner: CliRunner, cli_mocks: dict[str, Any]
+    ) -> None:
+        """Test that test command does NOT call get_executed_models.
+
+        get_executed_models is only used for lineage extraction in run/build.
         """
-        cli_mocks["get_models_with_tests"].return_value = {
-            "model.my_project.users",
-            "model.my_project.orders",
-        }
-
         runner.invoke(
             cli,
             [
@@ -1621,21 +1630,17 @@ class TestTestCommandLineageEmission:
             ],
         )
 
-        # Verify extract_all_model_lineage received the model filter
-        call_kwargs = cli_mocks["extract_lineage"].call_args[1]
-        model_ids = call_kwargs.get("model_ids")
-        assert model_ids == {"model.my_project.users", "model.my_project.orders"}
+        # get_executed_models should NOT be called for test command
+        cli_mocks["get_executed"].assert_not_called()
 
-    def test_test_command_emits_lineage_events_for_tested_models(
+    def test_test_command_only_emits_test_events_plus_terminal(
         self, runner: CliRunner, cli_mocks: dict[str, Any]
     ) -> None:
-        """Test that test command includes lineage events in batch emission."""
-        # Set up lineage events to be returned
-        cli_mocks["construct_lineage"].return_value = [
+        """Test that test command emits only test events + terminal, no lineage."""
+        cli_mocks["construct"].return_value = [
             cli_mocks["run_event"],
             cli_mocks["run_event"],
         ]
-        cli_mocks["construct"].return_value = [cli_mocks["run_event"]]
 
         runner.invoke(
             cli,
@@ -1646,15 +1651,15 @@ class TestTestCommandLineageEmission:
             ],
         )
 
-        # Second emit call should include lineage events
+        # Second emit call should have test events + terminal only
         batch_events = cli_mocks["emit"].call_args_list[1][0][0]
-        # 2 lineage + 1 test + 1 terminal = 4 events
-        assert len(batch_events) == 4
+        # 2 test events + 1 terminal = 3 events (no lineage!)
+        assert len(batch_events) == 3
 
-    def test_test_command_uses_dataset_namespace_for_lineage(
+    def test_test_command_dataset_namespace_passed_to_test_events(
         self, runner: CliRunner, cli_mocks: dict[str, Any]
     ) -> None:
-        """Test that --dataset-namespace is passed to extract_all_model_lineage."""
+        """Test that --dataset-namespace is passed to construct_test_events."""
         runner.invoke(
             cli,
             [
@@ -1666,34 +1671,9 @@ class TestTestCommandLineageEmission:
             ],
         )
 
-        # Verify namespace_override was passed
-        call_kwargs = cli_mocks["extract_lineage"].call_args[1]
+        # Verify namespace_override was passed to construct_test_events
+        call_kwargs = cli_mocks["construct"].call_args[1]
         assert (
             call_kwargs.get("namespace_override")
             == "postgresql://mydb.example.com:5432/analytics"
         )
-
-    def test_test_command_no_lineage_for_empty_model_filter(
-        self, runner: CliRunner, cli_mocks: dict[str, Any]
-    ) -> None:
-        """Test that empty model filter results in no lineage extraction.
-
-        This can happen if no tests matched the --select filter.
-        """
-        cli_mocks["get_models_with_tests"].return_value = set()  # No models with tests
-        cli_mocks["extract_lineage"].return_value = []  # No lineage
-        cli_mocks["construct_lineage"].return_value = []  # No lineage events
-
-        runner.invoke(
-            cli,
-            [
-                "test",
-                "--correlator-endpoint",
-                "http://localhost:8080/api/v1/lineage/events",
-            ],
-        )
-
-        # extract_lineage should still be called (with empty filter)
-        cli_mocks["extract_lineage"].assert_called_once()
-        call_kwargs = cli_mocks["extract_lineage"].call_args[1]
-        assert call_kwargs.get("model_ids") == set()
