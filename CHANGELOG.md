@@ -46,6 +46,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Tests validate existing data (inputs only) - they don't produce outputs
   - Added `emit_lineage_events` flag to `WorkflowConfig` for command-specific control
 
+- Fix incorrect PRODUCER URL in OpenLineage events
+  - Changed from `https://github.com/correlator-io/dbt-correlator` to
+    `https://github.com/correlator-io/correlator-dbt` (correct repository name)
+
 ## [0.1.0] - 2026-01-06
 
 First functional release of dbt-correlator. This release provides complete

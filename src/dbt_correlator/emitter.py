@@ -79,7 +79,7 @@ from .parser import (
 logger = logging.getLogger(__name__)
 
 # Plugin version for producer field
-PRODUCER = f"https://github.com/correlator-io/dbt-correlator/{__version__}"
+PRODUCER = f"https://github.com/correlator-io/correlator-dbt/{__version__}"
 
 
 def _serialize_attr_value(

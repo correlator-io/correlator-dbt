@@ -341,7 +341,7 @@ class TestCreateWrappingEvent:
         assert event.job.name == "dbt_test"
         assert len(event.inputs) == 0
         assert len(event.outputs) == 0
-        assert "correlator-io/dbt-correlator" in event.producer
+        assert "correlator-io/correlator-dbt" in event.producer
 
     def test_complete_event(self) -> None:
         """Test creation of COMPLETE wrapping event.
@@ -415,7 +415,7 @@ class TestConstructTestEvents:
             - eventType is "RUNNING" (intermediate event, not terminal)
             - run.runId matches invocation_id from run_results
             - job namespace and name are set correctly
-            - producer is "https://github.com/correlator-io/dbt-correlator/..."
+            - producer is "https://github.com/correlator-io/correlator-dbt/..."
             - schemaURL points to OpenLineage spec
             - inputs array contains datasets
             - outputs array is empty (tests validate inputs, not produce outputs)
@@ -441,7 +441,7 @@ class TestConstructTestEvents:
         assert event.job.namespace == "dbt"
         # Job name includes dataset name for unique idempotency keys
         assert event.job.name.startswith("dbt_test_run.")
-        assert "correlator-io/dbt-correlator" in event.producer
+        assert "correlator-io/correlator-dbt" in event.producer
         assert isinstance(event.inputs, list)
         assert len(event.inputs) > 0  # Should have datasets with tests
         assert isinstance(event.outputs, list)
@@ -1172,7 +1172,7 @@ class TestConstructLineageEvent:
             model_lineage=sample_model_lineage,
             run_id=run_id,
             job_namespace="dbt",
-            producer="https://github.com/correlator-io/dbt-correlator/0.1.0",
+            producer="https://github.com/correlator-io/correlator-dbt/0.1.0",
             event_time=event_time,
         )
 
@@ -1183,7 +1183,7 @@ class TestConstructLineageEvent:
         assert event.job.namespace == "dbt"
         assert event.job.name == "model.jaffle_shop.customers"
         assert event.eventTime == event_time
-        assert "correlator-io/dbt-correlator" in event.producer
+        assert "correlator-io/correlator-dbt" in event.producer
 
     def test_includes_inputs(self, sample_model_lineage) -> None:
         """Test that lineage event includes input datasets from ModelLineage.
@@ -1330,7 +1330,7 @@ class TestConstructLineageEvent:
             model_lineage=sample_model_lineage,
             run_id="550e8400-e29b-41d4-a716-446655440005",
             job_namespace="dbt",
-            producer="https://github.com/correlator-io/dbt-correlator/0.1.0",
+            producer="https://github.com/correlator-io/correlator-dbt/0.1.0",
             event_time="2024-01-01T12:00:00Z",
             execution_result=sample_model_execution_result,
         )
@@ -1681,7 +1681,7 @@ class TestEmitEventsOpenLineageConsumerCompatibility:
             model_lineage=sample_model_lineage,
             run_id="550e8400-e29b-41d4-a716-446655440006",
             job_namespace="dbt",
-            producer="https://github.com/correlator-io/dbt-correlator/0.1.0",
+            producer="https://github.com/correlator-io/correlator-dbt/0.1.0",
             event_time="2024-01-01T12:00:00Z",
             execution_result=execution_result,
         )
