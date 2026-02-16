@@ -46,6 +46,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Tests validate existing data (inputs only) - they don't produce outputs
   - Added `emit_lineage_events` flag to `WorkflowConfig` for command-specific control
 
+- **Critical:** Add ParentRunFacet for parent-child job correlation
+  - Lineage and test events now include `run.facets.parent` referencing the wrapping job
+  - Previously, Correlator couldn't link child events (unique `runId`) to wrapping events
+  - This caused model jobs to show "RUNNING" status with invalid completion timestamps
+  - Required for correct job status display on incident detail page
+  - Uses OpenLineage SDK classes (`ParentRunFacet`, `ParentRun`, `ParentJob`) for validation
+
 - Fix incorrect PRODUCER URL in OpenLineage events
   - Changed from `https://github.com/correlator-io/dbt-correlator` to
     `https://github.com/correlator-io/correlator-dbt` (correct repository name)

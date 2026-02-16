@@ -623,7 +623,7 @@ def extract_all_model_lineage(
         >>> m = parse_manifest("target/manifest.json")
         >>> lineages = extract_all_model_lineage(m)
         >>> len(lineages)  # One per model
-        13
+        10
         >>> lineages[0].unique_id
         'model.jaffle_shop.customers'
     """

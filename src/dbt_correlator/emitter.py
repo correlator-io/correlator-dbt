@@ -63,6 +63,9 @@ from openlineage.client.generated.data_quality_assertions_dataset import (
 from openlineage.client.generated.output_statistics_output_dataset import (
     OutputStatisticsOutputDatasetFacet,
 )
+from openlineage.client.generated.parent_run import Job as ParentJob
+from openlineage.client.generated.parent_run import ParentRunFacet
+from openlineage.client.generated.parent_run import Run as ParentRun
 from uuid6 import uuid7
 
 from . import __version__
@@ -103,6 +106,35 @@ def _serialize_attr_value(
     if isinstance(value, Enum):
         return value.value
     return value
+
+
+def _build_parent_facet(
+    parent_run_id: str,
+    parent_job_namespace: str,
+    parent_job_name: str,
+    producer: str,
+) -> ParentRunFacet:
+    """Build ParentRunFacet for establishing parent-child job hierarchy.
+
+    Uses OpenLineage SDK classes which provide:
+    - UUID validation for runId (fails fast on invalid input)
+    - Automatic _schemaURL population
+    - Automatic _producer population
+
+    Args:
+        parent_run_id: UUID of the parent run (wrapping job).
+        parent_job_namespace: OpenLineage namespace of parent job.
+        parent_job_name: Name of the parent job (e.g., "jaffle_shop.build").
+        producer: Producer URL for facet metadata.
+
+    Returns:
+        ParentRunFacet instance ready to be added to run.facets.
+    """
+    return ParentRunFacet(  # type: ignore[call-arg]
+        run=ParentRun(runId=parent_run_id),  # type: ignore[call-arg]
+        job=ParentJob(namespace=parent_job_namespace, name=parent_job_name),  # type: ignore[call-arg]
+        producer=producer,
+    )
 
 
 def create_wrapping_event(
@@ -235,6 +267,9 @@ def construct_test_events(
     run_id: str,
     namespace_override: Optional[str] = None,
     model_run_ids: Optional[dict[str, str]] = None,
+    parent_run_id: Optional[str] = None,
+    parent_job_namespace: Optional[str] = None,
+    parent_job_name: Optional[str] = None,
 ) -> list[RunEvent]:
     """Construct OpenLineage RUNNING events with dataQualityAssertions facets.
 
@@ -259,6 +294,9 @@ def construct_test_events(
         model_run_ids: Optional mapping of model_unique_id -> runId.
             For `dbt build`: test events share runId with their model.
             For `dbt test`: not provided, uses fallback run_id.
+        parent_run_id: Optional UUID of parent run for job hierarchy.
+        parent_job_namespace: Optional namespace of parent job.
+        parent_job_name: Optional name of parent job.
 
     Returns:
         List of OpenLineage RunEvents (eventType=RUNNING) with
@@ -278,6 +316,13 @@ def construct_test_events(
         For `dbt build`: Test events share runId with the model they test.
         Events use RUNNING state - the terminal state (COMPLETE/FAIL) is
         determined by the wrapping event based on dbt exit code.
+
+    Parent Hierarchy:
+        For all commands (dbt test, dbt build), test events' parent is the
+        wrapping job. This provides a shallow (single-level) hierarchy:
+        wrapping job (jaffle_shop.test)
+          +-- test job (jaffle_shop.test.marts.customers)
+          +-- test job (jaffle_shop.test.marts.orders)
     """
     grouped = group_tests_by_dataset(run_results, manifest, namespace_override)
     events = []
@@ -334,11 +379,21 @@ def construct_test_events(
         # and only the first would be stored by Correlator.
         unique_job_name = f"{job_name}.{dataset_name}"
 
+        # Build run facets for parent hierarchy
+        run_facets: dict[str, ParentRunFacet] = {}
+        if parent_run_id and parent_job_namespace and parent_job_name:
+            run_facets["parent"] = _build_parent_facet(
+                parent_run_id=parent_run_id,
+                parent_job_namespace=parent_job_namespace,
+                parent_job_name=parent_job_name,
+                producer=PRODUCER,
+            )
+
         # Create event
         event = RunEvent(  # type: ignore[call-arg]
             eventType=RunState.RUNNING,
             eventTime=run_results.metadata.generated_at.isoformat(),
-            run=Run(runId=event_run_id),  # type: ignore[call-arg]
+            run=Run(runId=event_run_id, facets=run_facets if run_facets else None),  # type: ignore[call-arg]
             job=Job(namespace=job_namespace, name=unique_job_name),  # type: ignore[call-arg]
             producer=PRODUCER,
             inputs=[dataset],
@@ -456,6 +511,9 @@ def construct_lineage_event(
     producer: str,
     event_time: str,
     execution_result: Optional[ModelExecutionResult] = None,
+    parent_run_id: Optional[str] = None,
+    parent_job_namespace: Optional[str] = None,
+    parent_job_name: Optional[str] = None,
 ) -> RunEvent:
     """Construct OpenLineage RUNNING event for model lineage.
 
@@ -472,6 +530,9 @@ def construct_lineage_event(
         event_time: ISO 8601 timestamp for the event.
         execution_result: Optional execution metrics from dbt run/build.
             When provided, adds outputStatistics facet with row count.
+        parent_run_id: Optional UUID of parent run for job hierarchy.
+        parent_job_namespace: Optional namespace of parent job.
+        parent_job_name: Optional name of parent job.
 
     Returns:
         OpenLineage RunEvent with RUNNING status, inputs, and output.
@@ -491,9 +552,11 @@ def construct_lineage_event(
     Note:
         Job name is set to model_lineage.unique_id to identify the model.
         Each model gets a unique run_id to prevent Correlator from aggregating
-        events into self-referential loops (Bug 4 fix).
+        events into self-referential loops.
         Events use RUNNING state - the terminal state (COMPLETE/FAIL) is
         determined by the wrapping event based on dbt exit code.
+        All three parent_* parameters must be provided together to add
+        ParentRunFacet establishing parent-child relationship with wrapping job.
     """
     # Build input datasets from ModelLineage.inputs
     inputs = [
@@ -519,10 +582,20 @@ def construct_lineage_event(
         outputFacets=output_facets,
     )
 
+    # Build run facets for parent hierarchy
+    run_facets: dict[str, ParentRunFacet] = {}
+    if parent_run_id and parent_job_namespace and parent_job_name:
+        run_facets["parent"] = _build_parent_facet(
+            parent_run_id=parent_run_id,
+            parent_job_namespace=parent_job_namespace,
+            parent_job_name=parent_job_name,
+            producer=producer,
+        )
+
     return RunEvent(  # type: ignore[call-arg]
         eventType=RunState.RUNNING,
         eventTime=event_time,
-        run=Run(runId=run_id),  # type: ignore[call-arg]
+        run=Run(runId=run_id, facets=run_facets if run_facets else None),  # type: ignore[call-arg]
         job=Job(namespace=job_namespace, name=model_lineage.unique_id),  # type: ignore[call-arg]
         producer=producer,
         inputs=inputs,
@@ -536,6 +609,9 @@ def construct_lineage_events(
     producer: str,
     event_time: str,
     execution_results: Optional[dict[str, ModelExecutionResult]] = None,
+    parent_run_id: Optional[str] = None,
+    parent_job_namespace: Optional[str] = None,
+    parent_job_name: Optional[str] = None,
 ) -> tuple[list[RunEvent], dict[str, str]]:
     """Construct RUNNING lineage events for multiple models with unique runIds.
 
@@ -552,6 +628,9 @@ def construct_lineage_events(
         execution_results: Optional dict mapping model unique_id to
             ModelExecutionResult. Only models with matching results
             will have outputStatistics facet populated.
+        parent_run_id: Optional UUID of parent run for job hierarchy.
+        parent_job_namespace: Optional namespace of parent job.
+        parent_job_name: Optional name of parent job.
 
     Returns:
         Tuple of:
@@ -576,8 +655,10 @@ def construct_lineage_events(
         Used by `run` and `build` commands for lineage emission.
         Events use RUNNING state - the terminal state (COMPLETE/FAIL) is
         determined by the wrapping event based on dbt exit code.
+        All three parent_* parameters must be provided together to add
+        ParentRunFacet establishing parent-child relationship with wrapping job.
 
-    Bug 4 Fix:
+    Bug Fix:
         Previously all events shared a single runId. Correlator aggregates
         by runId, creating self-referential loops when the same dataset
         appears as both input (dependency) and output (producer) across
@@ -603,6 +684,9 @@ def construct_lineage_events(
             producer=producer,
             event_time=event_time,
             execution_result=exec_result,
+            parent_run_id=parent_run_id,
+            parent_job_namespace=parent_job_namespace,
+            parent_job_name=parent_job_name,
         )
         events.append(event)
 

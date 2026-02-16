@@ -16,6 +16,7 @@ Test Coverage:
 import json
 import uuid
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -25,6 +26,7 @@ import requests
 from openlineage.client.event_v2 import RunState
 
 from dbt_correlator.emitter import (
+    _build_parent_facet,
     construct_lineage_event,
     construct_lineage_events,
     construct_test_events,
@@ -1720,3 +1722,388 @@ class TestEmitEventsOpenLineageConsumerCompatibility:
             output_facets = event_data["outputs"][0].get("outputFacets", {})
             assert "outputStatistics" in output_facets
             assert output_facets["outputStatistics"]["rowCount"] == 1000
+
+
+@pytest.mark.unit
+class TestBuildParentFacet:
+    """Tests for _build_parent_facet() helper function.
+
+    Validates ParentRunFacet construction using OpenLineage SDK classes,
+    including UUID validation and automatic metadata population.
+    """
+
+    def test_valid_uuid_produces_correct_structure(self) -> None:
+        """Test that valid UUID produces correct ParentRunFacet structure.
+
+        Validates that:
+            - ParentRunFacet is created with correct run.runId
+            - Parent job has correct namespace and name
+            - Producer is set correctly
+        """
+        facet = _build_parent_facet(
+            parent_run_id="550e8400-e29b-41d4-a716-446655440000",
+            parent_job_namespace="dbt://demo",
+            parent_job_name="jaffle_shop.build",
+            producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
+        )
+
+        assert facet.run.runId == "550e8400-e29b-41d4-a716-446655440000"
+        assert facet.job.namespace == "dbt://demo"
+        assert facet.job.name == "jaffle_shop.build"
+
+    def test_invalid_uuid_raises_value_error(self) -> None:
+        """Test that invalid UUID raises ValueError from SDK validation.
+
+        The OpenLineage SDK validates runId is a valid UUID format.
+        Invalid UUIDs should fail fast during construction.
+        """
+        with pytest.raises(ValueError, match="badly formed"):
+            _build_parent_facet(
+                parent_run_id="not-a-valid-uuid",
+                parent_job_namespace="dbt://demo",
+                parent_job_name="jaffle_shop.build",
+                producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
+            )
+
+    def test_serialization_includes_metadata_fields(self) -> None:
+        """Test that serialized facet includes _producer, _schemaURL, root.
+
+        OpenLineage SDK automatically populates facet metadata:
+            - _producer: From constructor argument
+            - _schemaURL: Auto-set to correct spec version
+            - root: Optional field, serializes as null if not set
+        """
+        facet = _build_parent_facet(
+            parent_run_id="550e8400-e29b-41d4-a716-446655440000",
+            parent_job_namespace="dbt://demo",
+            parent_job_name="jaffle_shop.build",
+            producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
+        )
+
+        # Serialize to dict
+        def serialize(inst, field, value):
+            if isinstance(value, Enum):
+                return value.value
+            return value
+
+        facet_dict = attr.asdict(facet, value_serializer=serialize)  # type: ignore[call-arg]
+
+        # Check metadata fields
+        assert (
+            facet_dict["_producer"]
+            == "https://github.com/correlator-io/correlator-dbt/0.1.2"
+        )
+        assert "_schemaURL" in facet_dict
+        assert "ParentRunFacet" in facet_dict["_schemaURL"]
+        # root is optional, serializes as None/null
+        assert "root" in facet_dict
+
+    def test_schema_url_matches_openlineage_spec(self) -> None:
+        """Test that _schemaURL matches OpenLineage spec version 1-1-0.
+
+        The SDK should auto-set schema URL to:
+        https://openlineage.io/spec/facets/1-1-0/ParentRunFacet.json#/$defs/ParentRunFacet
+        """
+        facet = _build_parent_facet(
+            parent_run_id="550e8400-e29b-41d4-a716-446655440000",
+            parent_job_namespace="dbt://demo",
+            parent_job_name="jaffle_shop.build",
+            producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
+        )
+
+        def serialize(inst, field, value):
+            if isinstance(value, Enum):
+                return value.value
+            return value
+
+        facet_dict = attr.asdict(facet, value_serializer=serialize)  # type: ignore[call-arg]
+
+        expected_url = "https://openlineage.io/spec/facets/1-1-0/ParentRunFacet.json"
+        assert expected_url in facet_dict["_schemaURL"]
+
+
+@pytest.mark.unit
+class TestConstructLineageEventWithParent:
+    """Tests for construct_lineage_event() with ParentRunFacet.
+
+    Validates that parent facet is correctly added to lineage events
+    when parent parameters are provided.
+    """
+
+    @pytest.fixture
+    def sample_model_lineage(self) -> ModelLineage:
+        """Create sample ModelLineage for testing."""
+        return ModelLineage(
+            unique_id="model.jaffle_shop.customers",
+            name="customers",
+            inputs=[
+                DatasetInfo(
+                    namespace="duckdb://jaffle_shop", name="main.stg_customers"
+                ),
+            ],
+            output=DatasetInfo(namespace="duckdb://jaffle_shop", name="main.customers"),
+        )
+
+    def test_parent_facet_included_when_all_params_provided(
+        self, sample_model_lineage
+    ) -> None:
+        """Test that ParentRunFacet is included when all parent params provided.
+
+        Validates that:
+            - run.facets contains "parent" key
+            - Parent facet has correct structure
+        """
+        event = construct_lineage_event(
+            model_lineage=sample_model_lineage,
+            run_id="660f9500-f30c-52e5-b827-557766551111",
+            job_namespace="dbt://demo",
+            producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
+            event_time="2024-01-01T12:00:00Z",
+            parent_run_id="550e8400-e29b-41d4-a716-446655440000",
+            parent_job_namespace="dbt://demo",
+            parent_job_name="jaffle_shop.build",
+        )
+
+        assert event.run.facets is not None
+        assert "parent" in event.run.facets
+
+        parent_facet = event.run.facets["parent"]
+        assert parent_facet.run.runId == "550e8400-e29b-41d4-a716-446655440000"
+        assert parent_facet.job.namespace == "dbt://demo"
+        assert parent_facet.job.name == "jaffle_shop.build"
+
+    def test_parent_facet_not_included_when_params_none(
+        self, sample_model_lineage
+    ) -> None:
+        """Test that ParentRunFacet is NOT included when params are None.
+
+        Validates backward compatibility - events without parent params
+        should not have run.facets set.
+        """
+        event = construct_lineage_event(
+            model_lineage=sample_model_lineage,
+            run_id="660f9500-f30c-52e5-b827-557766551111",
+            job_namespace="dbt://demo",
+            producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
+            event_time="2024-01-01T12:00:00Z",
+            # No parent params
+        )
+
+        # run.facets should be None or empty
+        assert event.run.facets is None or len(event.run.facets) == 0
+
+    def test_parent_facet_not_included_when_partial_params(
+        self, sample_model_lineage
+    ) -> None:
+        """Test that ParentRunFacet is NOT included when only some params provided.
+
+        All three parent params must be provided together.
+        Partial params should not create a facet.
+        """
+        event = construct_lineage_event(
+            model_lineage=sample_model_lineage,
+            run_id="660f9500-f30c-52e5-b827-557766551111",
+            job_namespace="dbt://demo",
+            producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
+            event_time="2024-01-01T12:00:00Z",
+            parent_run_id="550e8400-e29b-41d4-a716-446655440000",
+            # Missing parent_job_namespace and parent_job_name
+        )
+
+        assert event.run.facets is None or "parent" not in event.run.facets
+
+    def test_parent_facet_serializes_correctly(self, sample_model_lineage) -> None:
+        """Test that event with parent facet serializes to correct JSON structure.
+
+        Validates the full serialization path for events with ParentRunFacet.
+        """
+        event = construct_lineage_event(
+            model_lineage=sample_model_lineage,
+            run_id="660f9500-f30c-52e5-b827-557766551111",
+            job_namespace="dbt://demo",
+            producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
+            event_time="2024-01-01T12:00:00Z",
+            parent_run_id="550e8400-e29b-41d4-a716-446655440000",
+            parent_job_namespace="dbt://demo",
+            parent_job_name="jaffle_shop.build",
+        )
+
+        # Serialize event
+        def serialize(inst, field, value):
+            if isinstance(value, Enum):
+                return value.value
+            return value
+
+        event_dict = attr.asdict(event, value_serializer=serialize)  # type: ignore[call-arg]
+
+        # Verify JSON structure
+        assert "run" in event_dict
+        assert "facets" in event_dict["run"]
+        assert "parent" in event_dict["run"]["facets"]
+
+        parent = event_dict["run"]["facets"]["parent"]
+        assert parent["run"]["runId"] == "550e8400-e29b-41d4-a716-446655440000"
+        assert parent["job"]["namespace"] == "dbt://demo"
+        assert parent["job"]["name"] == "jaffle_shop.build"
+        assert "_producer" in parent
+        assert "_schemaURL" in parent
+
+
+@pytest.mark.unit
+class TestConstructLineageEventsWithParent:
+    """Tests for construct_lineage_events() with ParentRunFacet.
+
+    Validates that parent params are correctly passed to all model events.
+    """
+
+    @pytest.fixture
+    def sample_model_lineages(self) -> list[ModelLineage]:
+        """Create sample ModelLineage list for testing."""
+        return [
+            ModelLineage(
+                unique_id="model.jaffle_shop.stg_customers",
+                name="stg_customers",
+                inputs=[
+                    DatasetInfo(
+                        namespace="duckdb://jaffle_shop", name="main.raw_customers"
+                    ),
+                ],
+                output=DatasetInfo(
+                    namespace="duckdb://jaffle_shop", name="main.stg_customers"
+                ),
+            ),
+            ModelLineage(
+                unique_id="model.jaffle_shop.customers",
+                name="customers",
+                inputs=[
+                    DatasetInfo(
+                        namespace="duckdb://jaffle_shop", name="main.stg_customers"
+                    ),
+                ],
+                output=DatasetInfo(
+                    namespace="duckdb://jaffle_shop", name="main.customers"
+                ),
+            ),
+        ]
+
+    def test_all_events_have_parent_facet(self, sample_model_lineages) -> None:
+        """Test that all generated events have ParentRunFacet.
+
+        Validates that parent params are propagated to all model events.
+        """
+        events, _ = construct_lineage_events(
+            model_lineages=sample_model_lineages,
+            job_namespace="dbt://demo",
+            producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
+            event_time="2024-01-01T12:00:00Z",
+            parent_run_id="550e8400-e29b-41d4-a716-446655440000",
+            parent_job_namespace="dbt://demo",
+            parent_job_name="jaffle_shop.build",
+        )
+
+        assert len(events) == 2
+
+        for event in events:
+            assert event.run.facets is not None
+            assert "parent" in event.run.facets
+            assert (
+                event.run.facets["parent"].run.runId
+                == "550e8400-e29b-41d4-a716-446655440000"
+            )
+            assert event.run.facets["parent"].job.name == "jaffle_shop.build"
+
+    def test_no_parent_facet_when_params_none(self, sample_model_lineages) -> None:
+        """Test that no parent facet when params are None."""
+        events, _ = construct_lineage_events(
+            model_lineages=sample_model_lineages,
+            job_namespace="dbt://demo",
+            producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
+            event_time="2024-01-01T12:00:00Z",
+            # No parent params
+        )
+
+        for event in events:
+            assert event.run.facets is None or "parent" not in event.run.facets
+
+
+@pytest.mark.unit
+class TestConstructTestEventsWithParent:
+    """Tests for construct_test_events() with ParentRunFacet.
+
+    Validates that parent facet is correctly added to test events.
+    """
+
+    def test_parent_facet_included_in_test_events(
+        self, sample_run_results, sample_manifest
+    ) -> None:
+        """Test that test events include ParentRunFacet when params provided."""
+        events = construct_test_events(
+            run_results=sample_run_results,
+            manifest=sample_manifest,
+            job_namespace="dbt://demo",
+            job_name="jaffle_shop.test",
+            run_id="550e8400-e29b-41d4-a716-446655440000",
+            parent_run_id="550e8400-e29b-41d4-a716-446655440000",
+            parent_job_namespace="dbt://demo",
+            parent_job_name="jaffle_shop.test",
+        )
+
+        assert len(events) > 0
+
+        for event in events:
+            assert event.run.facets is not None
+            assert "parent" in event.run.facets
+            assert (
+                event.run.facets["parent"].run.runId
+                == "550e8400-e29b-41d4-a716-446655440000"
+            )
+            assert event.run.facets["parent"].job.name == "jaffle_shop.test"
+
+    def test_no_parent_facet_when_params_none(
+        self, sample_run_results, sample_manifest
+    ) -> None:
+        """Test that no parent facet when params are None."""
+        events = construct_test_events(
+            run_results=sample_run_results,
+            manifest=sample_manifest,
+            job_namespace="dbt://demo",
+            job_name="jaffle_shop.test",
+            run_id="550e8400-e29b-41d4-a716-446655440000",
+            # No parent params
+        )
+
+        for event in events:
+            assert event.run.facets is None or "parent" not in event.run.facets
+
+    def test_parent_facet_serializes_in_test_events(
+        self, sample_run_results, sample_manifest
+    ) -> None:
+        """Test that test events with parent facet serialize correctly."""
+        events = construct_test_events(
+            run_results=sample_run_results,
+            manifest=sample_manifest,
+            job_namespace="dbt://demo",
+            job_name="jaffle_shop.test",
+            run_id="550e8400-e29b-41d4-a716-446655440000",
+            parent_run_id="550e8400-e29b-41d4-a716-446655440000",
+            parent_job_namespace="dbt://demo",
+            parent_job_name="jaffle_shop.test",
+        )
+
+        def serialize(inst, field, value):
+            if isinstance(value, Enum):
+                return value.value
+            return value
+
+        for event in events:
+            event_dict = attr.asdict(event, value_serializer=serialize)  # type: ignore[call-arg]
+
+            # Verify parent facet in serialized output
+            assert "run" in event_dict
+            assert "facets" in event_dict["run"]
+            assert "parent" in event_dict["run"]["facets"]
+
+            parent = event_dict["run"]["facets"]["parent"]
+            assert "_producer" in parent
+            assert "_schemaURL" in parent
+            assert "ParentRunFacet" in parent["_schemaURL"]

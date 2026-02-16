@@ -1082,3 +1082,199 @@ class TestBuildCommandIntegration:
             "COMPLETE",
             "FAIL",
         }, "Last event in batch must be COMPLETE or FAIL"
+
+
+# =============================================================================
+# ParentRunFacet Integration Tests
+# =============================================================================
+
+
+class TestParentRunFacetIntegration:
+    """Integration tests for ParentRunFacet in emitted events.
+
+    These tests verify that lineage and test events contain valid ParentRunFacet
+    facets that correctly reference the wrapping job, establishing the parent-child
+    hierarchy required by Correlator.
+    """
+
+    def test_run_command_lineage_events_have_parent_facet(
+        self,
+        runner: CliRunner,
+        mock_dbt_project_dir_with_model_results: Path,
+        mock_correlator_success: responses.RequestsMock,
+    ) -> None:
+        """Test that dbt run lineage events include ParentRunFacet.
+
+        Validates:
+            - Lineage events (RUNNING) have run.facets.parent
+            - Parent facet references the wrapping job's runId
+            - Parent facet has correct job namespace and name
+        """
+        result = runner.invoke(
+            cli,
+            [
+                "run",
+                "--skip-dbt-run",
+                "--project-dir",
+                str(mock_dbt_project_dir_with_model_results),
+                "--profiles-dir",
+                str(mock_dbt_project_dir_with_model_results),
+                "--correlator-endpoint",
+                MOCK_CORRELATOR_ENDPOINT,
+            ],
+        )
+
+        assert result.exit_code == 0, f"CLI failed with: {result.output}"
+
+        # Get START event to find wrapping runId
+        start_events = parse_request_body(mock_correlator_success.calls[0].request)
+        wrapping_run_id = start_events[0]["run"]["runId"]
+        wrapping_job_name = start_events[0]["job"]["name"]
+
+        # Get batch events (lineage + terminal)
+        batch_events = parse_request_body(mock_correlator_success.calls[1].request)
+
+        # Find lineage events (RUNNING, not terminal)
+        lineage_events = [e for e in batch_events if e["eventType"] == "RUNNING"]
+
+        assert len(lineage_events) > 0, "Should have at least one lineage event"
+
+        for event in lineage_events:
+            # Verify parent facet exists
+            assert event["run"].get("facets") is not None, "run.facets should exist"
+            assert "parent" in event["run"]["facets"], "parent facet should exist"
+
+            parent = event["run"]["facets"]["parent"]
+
+            # Verify parent references wrapping job
+            assert (
+                parent["run"]["runId"] == wrapping_run_id
+            ), "parent.run.runId should match wrapping runId"
+            assert (
+                parent["job"]["name"] == wrapping_job_name
+            ), "parent.job.name should match wrapping job name"
+
+            # Verify OpenLineage metadata
+            assert "_producer" in parent, "parent should have _producer"
+            assert "_schemaURL" in parent, "parent should have _schemaURL"
+            assert "ParentRunFacet" in parent["_schemaURL"]
+
+    def test_test_command_test_events_have_parent_facet(
+        self,
+        runner: CliRunner,
+        mock_dbt_project_dir: Path,
+        mock_correlator_success: responses.RequestsMock,
+    ) -> None:
+        """Test that dbt test events include ParentRunFacet.
+
+        Validates:
+            - Test events (RUNNING with dataQualityAssertions) have run.facets.parent
+            - Parent facet references the wrapping job's runId
+        """
+        result = runner.invoke(
+            cli,
+            [
+                "test",
+                "--skip-dbt-run",
+                "--project-dir",
+                str(mock_dbt_project_dir),
+                "--profiles-dir",
+                str(mock_dbt_project_dir),
+                "--correlator-endpoint",
+                MOCK_CORRELATOR_ENDPOINT,
+            ],
+        )
+
+        assert result.exit_code == 0, f"CLI failed with: {result.output}"
+
+        # Get START event to find wrapping runId
+        start_events = parse_request_body(mock_correlator_success.calls[0].request)
+        wrapping_run_id = start_events[0]["run"]["runId"]
+
+        # Get batch events (test + terminal)
+        batch_events = parse_request_body(mock_correlator_success.calls[1].request)
+
+        # Find test events (RUNNING with inputs that have dataQualityAssertions)
+        test_events = [
+            e
+            for e in batch_events
+            if e["eventType"] == "RUNNING"
+            and e.get("inputs")
+            and any(
+                "dataQualityAssertions" in inp.get("inputFacets", {})
+                for inp in e["inputs"]
+            )
+        ]
+
+        assert len(test_events) > 0, "Should have at least one test event"
+
+        for event in test_events:
+            # Verify parent facet exists
+            assert event["run"].get("facets") is not None, "run.facets should exist"
+            assert "parent" in event["run"]["facets"], "parent facet should exist"
+
+            parent = event["run"]["facets"]["parent"]
+
+            # Verify parent references wrapping job
+            assert (
+                parent["run"]["runId"] == wrapping_run_id
+            ), "parent.run.runId should match wrapping runId"
+
+    def test_build_command_all_child_events_reference_same_parent(
+        self,
+        runner: CliRunner,
+        mock_dbt_project_dir_with_model_results: Path,
+        mock_correlator_success: responses.RequestsMock,
+    ) -> None:
+        """Test that dbt build child events all reference the same parent.
+
+        Validates:
+            - All RUNNING events (lineage or test) have parent facet
+            - All parent facets reference the same wrapping job
+            - Creates correct shallow hierarchy
+        """
+        result = runner.invoke(
+            cli,
+            [
+                "build",
+                "--skip-dbt-run",
+                "--project-dir",
+                str(mock_dbt_project_dir_with_model_results),
+                "--profiles-dir",
+                str(mock_dbt_project_dir_with_model_results),
+                "--correlator-endpoint",
+                MOCK_CORRELATOR_ENDPOINT,
+            ],
+        )
+
+        assert result.exit_code == 0, f"CLI failed with: {result.output}"
+
+        # Get START event to find wrapping runId and job name
+        start_events = parse_request_body(mock_correlator_success.calls[0].request)
+        wrapping_run_id = start_events[0]["run"]["runId"]
+        wrapping_job_name = start_events[0]["job"]["name"]
+        wrapping_job_namespace = start_events[0]["job"]["namespace"]
+
+        # Get batch events
+        batch_events = parse_request_body(mock_correlator_success.calls[1].request)
+
+        # Find all RUNNING events (lineage + test, not terminal)
+        child_events = [e for e in batch_events if e["eventType"] == "RUNNING"]
+
+        assert len(child_events) > 0, "Should have at least one child event"
+
+        # All child events should reference the same parent
+        for event in child_events:
+            assert (
+                event["run"].get("facets") is not None
+            ), f"run.facets missing in event for job {event['job']['name']}"
+            assert (
+                "parent" in event["run"]["facets"]
+            ), f"parent facet missing in event for job {event['job']['name']}"
+
+            parent = event["run"]["facets"]["parent"]
+
+            # All should reference same wrapping job
+            assert parent["run"]["runId"] == wrapping_run_id
+            assert parent["job"]["name"] == wrapping_job_name
+            assert parent["job"]["namespace"] == wrapping_job_namespace

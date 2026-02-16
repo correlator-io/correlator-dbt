@@ -429,6 +429,9 @@ def execute_workflow(config: WorkflowConfig) -> int:  # noqa: PLR0912, PLR0915
             producer=PRODUCER,
             event_time=event_time,
             execution_results=execution_results,
+            parent_run_id=wrapping_run_id,
+            parent_job_namespace=config.job_namespace,
+            parent_job_name=job_name,
         )
 
     # 9. Construct test events (only for test/build commands)
@@ -444,6 +447,9 @@ def execute_workflow(config: WorkflowConfig) -> int:  # noqa: PLR0912, PLR0915
             run_id=wrapping_run_id,
             namespace_override=config.dataset_namespace,
             model_run_ids=model_run_ids if model_run_ids else None,
+            parent_run_id=wrapping_run_id,
+            parent_job_namespace=config.job_namespace,
+            parent_job_name=job_name,
         )
 
     # 10. Create terminal event (COMPLETE or FAIL)
