@@ -108,6 +108,44 @@ def _serialize_attr_value(
     return value
 
 
+def _serialize_event_with_extended_fields(event: RunEvent) -> dict[str, Any]:
+    """Serialize RunEvent, merging extended assertion fields.
+
+    The SDK's Assertion class doesn't support additional properties,
+    so we store extended fields separately and merge them during serialization.
+    This enables durationMs and message fields in dataQualityAssertions.
+
+    Args:
+        event: RunEvent to serialize.
+
+    Returns:
+        Serialized event dict with extended fields merged into assertions.
+    """
+    event_dict = attr.asdict(event, value_serializer=_serialize_attr_value)  # type: ignore[call-arg]
+
+    # Merge extended fields into assertions
+    for input_dataset in event_dict.get("inputs", []):
+        input_facets = input_dataset.get("inputFacets", {})
+        dqa_facet = input_facets.get("dataQualityAssertions")
+        if dqa_facet and "assertions" in dqa_facet and event.inputs:
+            # Find corresponding InputDataset object to get extended fields
+            for orig_input in event.inputs:
+                if (
+                    orig_input.namespace == input_dataset["namespace"]
+                    and orig_input.name == input_dataset["name"]
+                ):
+                    if orig_input.inputFacets:
+                        orig_facet = orig_input.inputFacets.get("dataQualityAssertions")
+                        if orig_facet and hasattr(orig_facet, "_extended_fields"):
+                            extended = orig_facet._extended_fields  # type: ignore[attr-defined]
+                            for i, assertion in enumerate(dqa_facet["assertions"]):
+                                if i < len(extended):
+                                    assertion.update(extended[i])
+                    break
+
+    return event_dict
+
+
 def _build_parent_facet(
     parent_run_id: str,
     parent_job_namespace: str,
@@ -250,6 +288,7 @@ def group_tests_by_dataset(
                 "status": result.status,
                 "failures": result.failures,
                 "message": result.message,
+                "execution_time_seconds": result.execution_time_seconds,
                 "test_name": test_name,
                 "column_name": column_name,
                 "model_unique_id": model_unique_id,
@@ -266,66 +305,54 @@ def construct_test_events(
     job_name: str,
     run_id: str,
     namespace_override: Optional[str] = None,
-    model_run_ids: Optional[dict[str, str]] = None,
-    parent_run_id: Optional[str] = None,
-    parent_job_namespace: Optional[str] = None,
-    parent_job_name: Optional[str] = None,
 ) -> list[RunEvent]:
-    """Construct OpenLineage RUNNING events with dataQualityAssertions facets.
+    """Construct single OpenLineage RUNNING event with all test assertions.
 
-    Creates one RunEvent per dataset that has tests, with all test results
-    embedded in the dataQualityAssertions facet. Events use RUNNING state
-    (not COMPLETE) because they are intermediate data carriers.
+    Creates one RunEvent with multiple input datasets, each carrying their
+    dataQualityAssertions facet. This is a dbt-correlator-specific pattern
+    designed to integrate with the wrapping event lifecycle.
 
-    Each test event has a unique job name (job_name + dataset_name) to ensure
-    unique idempotency keys in Correlator. This prevents events from being
-    treated as duplicates when multiple datasets have tests.
+    Extended assertion fields (durationMs, message) are stored on the facet
+    for later merge during serialization - allowed by OpenLineage schema
+    and extracted by Correlator.
 
     Args:
         run_results: Parsed dbt run_results.json.
         manifest: Parsed dbt manifest.json.
         job_namespace: OpenLineage job namespace (e.g., "dbt", "production").
-        job_name: Base job name for OpenLineage job (e.g., "jaffle_shop.test").
-            The dataset name is appended to create unique job names per dataset.
-        run_id: Fallback run identifier when model_run_ids is not provided.
-            Used for `dbt test` alone (single shared runId for all test events).
-        namespace_override: Optional namespace override for datasets.
-            When provided, overrides the manifest-derived namespace.
-        model_run_ids: Optional mapping of model_unique_id -> runId.
-            For `dbt build`: test events share runId with their model.
-            For `dbt test`: not provided, uses fallback run_id.
-        parent_run_id: Optional UUID of parent run for job hierarchy.
-        parent_job_namespace: Optional namespace of parent job.
-        parent_job_name: Optional name of parent job.
+        job_name: OpenLineage job name (e.g., "jaffle_shop.test").
+        run_id: Run ID (same as wrapping job).
+        namespace_override: Optional dataset namespace override.
 
     Returns:
-        List of OpenLineage RunEvents (eventType=RUNNING) with
-        dataQualityAssertions facets.
+        List containing single RunEvent, or empty list if no tests.
 
     Example:
         >>> events = construct_test_events(
         ...     run_results, manifest, "dbt", "jaffle_shop.test", run_id
         ... )
         >>> len(events)
-        4  # One event per dataset with tests
-        >>> events[0].job.name
-        'jaffle_shop.test.marts.customers'
+        1  # Single event with all test results
+        >>> len(events[0].inputs)
+        4  # Multiple datasets with tests
 
     Note:
-        For `dbt test`: All events share the same run_id (fallback).
-        For `dbt build`: Test events share runId with the model they test.
         Events use RUNNING state - the terminal state (COMPLETE/FAIL) is
         determined by the wrapping event based on dbt exit code.
 
-    Parent Hierarchy:
-        For all commands (dbt test, dbt build), test events' parent is the
-        wrapping job. This provides a shallow (single-level) hierarchy:
-        wrapping job (jaffle_shop.test)
-          +-- test job (jaffle_shop.test.marts.customers)
-          +-- test job (jaffle_shop.test.marts.orders)
+    Event Structure:
+        - Single job name (no per-dataset suffix)
+        - Single run_id (same as wrapping job)
+        - No ParentRunFacet (fixes self-referential parent bug)
+        - Multiple inputs, each with dataQualityAssertions facet
     """
     grouped = group_tests_by_dataset(run_results, manifest, namespace_override)
-    events = []
+
+    if not grouped:
+        return []
+
+    # Build all input datasets with their assertions
+    inputs: list[InputDataset] = []
 
     for dataset_key, tests in grouped.items():
         # Parse dataset key: namespace|name (pipe separator avoids "://" conflicts)
@@ -335,18 +362,10 @@ def construct_test_events(
             logger.warning(f"Invalid dataset key format: {dataset_key}")
             continue
 
-        # Determine runId for this test event
-        # For dbt build: use the model's runId from model_run_ids mapping
-        # For dbt test: use the fallback run_id (single shared runId)
-        event_run_id = run_id  # Default fallback
-        if model_run_ids and tests:
-            # Get model_unique_id from first test (all tests in group are for same model)
-            model_unique_id = tests[0].get("model_unique_id", "")
-            if model_unique_id and model_unique_id in model_run_ids:
-                event_run_id = model_run_ids[model_unique_id]
+        # Build assertions using SDK classes
+        assertions: list[Assertion] = []
+        extended_fields: list[dict[str, Any]] = []  # Store extended fields separately
 
-        # Build assertions from test results
-        assertions = []
         for test in tests:
             # Map dbt status to OpenLineage success boolean
             success = map_test_status(test["status"])
@@ -356,6 +375,7 @@ def construct_test_events(
             if test["column_name"]:
                 assertion_name = f"{test['test_name']}({test['column_name']})"
 
+            # Create SDK Assertion object (standard fields only)
             assertion = Assertion(  # type: ignore[call-arg]
                 assertion=assertion_name,
                 success=success,
@@ -363,45 +383,60 @@ def construct_test_events(
             )
             assertions.append(assertion)
 
-        # Create dataQualityAssertions facet
+            # Store extended fields for post-serialization merge
+            exec_time = test.get("execution_time_seconds")
+            extended_fields.append(
+                {
+                    "durationMs": int((exec_time or 0) * 1000),
+                    "message": test.get("message"),
+                }
+            )
+
+        # Create facet using SDK class
         dqa_facet = DataQualityAssertionsDatasetFacet(assertions=assertions)  # type: ignore[call-arg]
 
-        # Create dataset with facet
+        # Store extended fields for later merge during serialization
+        # We attach them to the facet object for access during emit
+        dqa_facet._extended_fields = extended_fields  # type: ignore[attr-defined]
+
         dataset = InputDataset(  # type: ignore[call-arg]
             namespace=dataset_namespace,
             name=dataset_name,
             inputFacets={"dataQualityAssertions": dqa_facet},
         )
+        inputs.append(dataset)
 
-        # Create unique job name per dataset to avoid idempotency collision.
-        # Without this, all test events would have the same idempotency key
-        # (job.namespace + job.name + run.runId + eventType + eventTime)
-        # and only the first would be stored by Correlator.
-        unique_job_name = f"{job_name}.{dataset_name}"
+    # Create single event with all inputs (no run facets - no parent)
+    event = RunEvent(  # type: ignore[call-arg]
+        eventType=RunState.RUNNING,
+        eventTime=run_results.metadata.generated_at.isoformat(),
+        run=Run(runId=run_id),  # type: ignore[call-arg]  # No facets - no parent relationship
+        job=Job(namespace=job_namespace, name=job_name),  # type: ignore[call-arg]
+        producer=PRODUCER,
+        inputs=inputs,
+        outputs=[],
+    )
 
-        # Build run facets for parent hierarchy
-        run_facets: dict[str, ParentRunFacet] = {}
-        if parent_run_id and parent_job_namespace and parent_job_name:
-            run_facets["parent"] = _build_parent_facet(
-                parent_run_id=parent_run_id,
-                parent_job_namespace=parent_job_namespace,
-                parent_job_name=parent_job_name,
-                producer=PRODUCER,
-            )
+    return [event]
 
-        # Create event
-        event = RunEvent(  # type: ignore[call-arg]
-            eventType=RunState.RUNNING,
-            eventTime=run_results.metadata.generated_at.isoformat(),
-            run=Run(runId=event_run_id, facets=run_facets if run_facets else None),  # type: ignore[call-arg]
-            job=Job(namespace=job_namespace, name=unique_job_name),  # type: ignore[call-arg]
-            producer=PRODUCER,
-            inputs=[dataset],
-            outputs=[],
-        )
-        events.append(event)
 
-    return events
+def _has_extended_fields(event: RunEvent) -> bool:
+    """Check if event has inputs with extended dataQualityAssertions fields."""
+    if not event.inputs:
+        return False
+    for inp in event.inputs:
+        if inp.inputFacets and "dataQualityAssertions" in inp.inputFacets:
+            facet = inp.inputFacets["dataQualityAssertions"]
+            if hasattr(facet, "_extended_fields"):
+                return True
+    return False
+
+
+def _serialize_event(event: RunEvent) -> dict[str, Any]:
+    """Serialize a single event, handling extended fields if present."""
+    if _has_extended_fields(event):
+        return _serialize_event_with_extended_fields(event)
+    return attr.asdict(event, value_serializer=_serialize_attr_value)  # type: ignore[call-arg]
 
 
 def emit_events(
@@ -446,12 +481,7 @@ def emit_events(
         headers["X-API-Key"] = api_key
 
     # Serialize events to JSON array (batch format)
-    # v2 events use attrs, so use attr.asdict() for serialization
-    # Note: value_serializer is valid but not in type stubs
-    event_dicts = [
-        attr.asdict(event, value_serializer=_serialize_attr_value)  # type: ignore[call-arg]
-        for event in events
-    ]
+    event_dicts = [_serialize_event(event) for event in events]
 
     try:
         # Single HTTP POST with all events
@@ -463,36 +493,7 @@ def emit_events(
         )
 
         # Handle responses - support various OpenLineage consumers
-        # - 200 with body: Correlator or OL consumer with summary
-        # - 200 without body: Simple acknowledgment
-        # - 204 No Content: Standard OL consumer acknowledgment
-        # - 207 Partial Success: Some events failed
-        if response.status_code in (200, 204):
-            logger.info(f"Successfully emitted {len(events)} events")
-            # Log summary if available in response body (useful for debugging)
-            if response.status_code == 200 and response.text:
-                try:
-                    body = response.json()
-                    if "summary" in body:
-                        summary = body["summary"]
-                        logger.info(
-                            f"Response: {summary.get('successful', 0)} successful, "
-                            f"{summary.get('failed', 0)} failed"
-                        )
-                except (ValueError, KeyError):
-                    pass  # No JSON body or no summary - that's fine
-        elif response.status_code == 207:
-            # Partial success - some events failed
-            body = response.json()
-            logger.warning(
-                f"Partial success: {body['summary']['successful']}/{body['summary']['received']} events succeeded. "
-                f"Failed events: {body.get('failed_events', [])}"
-            )
-        else:
-            # Error response (4xx/5xx)
-            raise ValueError(
-                f"OpenLineage backend returned {response.status_code}: {response.text}"
-            )
+        _handle_emit_response(response, len(events))
 
     except requests.ConnectionError as e:
         raise ConnectionError(
@@ -502,6 +503,53 @@ def emit_events(
         raise TimeoutError(
             f"Request to OpenLineage backend timed out after 30s: {e}"
         ) from e
+
+
+def _handle_emit_response(response: requests.Response, event_count: int) -> None:
+    """Handle HTTP response from OpenLineage backend.
+
+    Args:
+        response: HTTP response from backend.
+        event_count: Number of events that were sent.
+
+    Raises:
+        ValueError: If response indicates error (4xx/5xx status codes).
+    """
+    # Success responses: 200, 204
+    if response.status_code in (200, 204):
+        logger.info(f"Successfully emitted {event_count} events")
+        _log_response_summary(response)
+        return
+
+    # Partial success: 207
+    if response.status_code == 207:
+        body = response.json()
+        logger.warning(
+            f"Partial success: {body['summary']['successful']}/{body['summary']['received']} events succeeded. "
+            f"Failed events: {body.get('failed_events', [])}"
+        )
+        return
+
+    # Error response (4xx/5xx)
+    raise ValueError(
+        f"OpenLineage backend returned {response.status_code}: {response.text}"
+    )
+
+
+def _log_response_summary(response: requests.Response) -> None:
+    """Log summary from response body if available."""
+    if response.status_code != 200 or not response.text:
+        return
+    try:
+        body = response.json()
+        if "summary" in body:
+            summary = body["summary"]
+            logger.info(
+                f"Response: {summary.get('successful', 0)} successful, "
+                f"{summary.get('failed', 0)} failed"
+            )
+    except (ValueError, KeyError):
+        pass  # No JSON body or no summary - that's fine
 
 
 def construct_lineage_event(
@@ -612,7 +660,7 @@ def construct_lineage_events(
     parent_run_id: Optional[str] = None,
     parent_job_namespace: Optional[str] = None,
     parent_job_name: Optional[str] = None,
-) -> tuple[list[RunEvent], dict[str, str]]:
+) -> list[RunEvent]:
     """Construct RUNNING lineage events for multiple models with unique runIds.
 
     Creates one RunEvent per model with its inputs and output. Events use
@@ -633,12 +681,10 @@ def construct_lineage_events(
         parent_job_name: Optional name of parent job.
 
     Returns:
-        Tuple of:
-            - List of OpenLineage RunEvents (eventType=RUNNING), one per model
-            - Dict mapping model unique_id to its runId (for test event correlation)
+        List of OpenLineage RunEvents (eventType=RUNNING), one per model.
 
     Example:
-        >>> events, model_run_ids = construct_lineage_events(
+        >>> events = construct_lineage_events(
         ...     model_lineages=lineages,
         ...     job_namespace="dbt",
         ...     producer="https://github.com/correlator-io/dbt-correlator/0.1.0",
@@ -647,11 +693,9 @@ def construct_lineage_events(
         ... )
         >>> len(events)
         4  # One event per model
-        >>> len(model_run_ids)
-        4  # Mapping of model_unique_id -> runId
 
     Note:
-        Empty model_lineages list returns empty list and empty dict.
+        Empty model_lineages list returns empty list.
         Used by `run` and `build` commands for lineage emission.
         Events use RUNNING state - the terminal state (COMPLETE/FAIL) is
         determined by the wrapping event based on dbt exit code.
@@ -665,12 +709,10 @@ def construct_lineage_events(
         different models. Unique runIds per model prevent this aggregation.
     """
     events = []
-    model_run_ids: dict[str, str] = {}
 
     for lineage in model_lineages:
         # Generate unique runId for this model (UUID7 per OpenLineage spec)
         model_run_id = str(uuid7())
-        model_run_ids[lineage.unique_id] = model_run_id
 
         # Get execution result for this model if available
         exec_result = None
@@ -690,4 +732,4 @@ def construct_lineage_events(
         )
         events.append(event)
 
-    return events, model_run_ids
+    return events

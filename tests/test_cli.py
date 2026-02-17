@@ -165,11 +165,8 @@ def cli_mocks(
         mock_parse_manifest.return_value = mock_manifest
         mock_wrapping.return_value = mock_run_event
         mock_construct.return_value = [mock_run_event]
-        # construct_lineage_events returns (events, model_run_ids) tuple
-        mock_lineage_events.return_value = (
-            [mock_run_event],
-            {"model.my_project.users": "mock-model-run-id"},
-        )
+        # construct_lineage_events returns list of events
+        mock_lineage_events.return_value = [mock_run_event]
         mock_extract_lineage.return_value = []  # Empty list of ModelLineage
         mock_get_executed.return_value = {"model.my_project.users"}
         mock_extract_model_results.return_value = {}
@@ -1135,13 +1132,13 @@ class TestBuildCommand:
         cli_mocks["construct_lineage"].assert_called_once()
         cli_mocks["construct"].assert_called_once()
 
-    def test_build_command_passes_model_run_ids_to_test_events(
+    def test_build_command_test_events_use_consolidated_pattern(
         self, runner: CliRunner, cli_mocks: dict[str, Any]
     ) -> None:
-        """Test that build command passes model_run_ids mapping to test events.
+        """Test that build command uses consolidated pattern for test events.
 
-        Bug 4 Fix: For dbt build, test events should share runId with their model
-        via the model_run_ids mapping from construct_lineage_events.
+        Consolidated pattern: test events no longer receive model_run_ids.
+        Instead, a single event with all test inputs is created.
         """
         runner.invoke(
             cli,
@@ -1152,18 +1149,18 @@ class TestBuildCommand:
             ],
         )
 
-        # Verify construct_test_events was called with model_run_ids mapping
+        # Verify construct_test_events was called without model_run_ids
         construct_call_kwargs = cli_mocks["construct"].call_args[1]
 
-        # model_run_ids should be passed (non-None for dbt build)
+        # model_run_ids should NOT be passed (consolidated pattern)
         assert (
-            "model_run_ids" in construct_call_kwargs
-        ), "construct_test_events should receive model_run_ids parameter"
-        model_run_ids = construct_call_kwargs.get("model_run_ids")
+            "model_run_ids" not in construct_call_kwargs
+        ), "construct_test_events should NOT receive model_run_ids (consolidated pattern)"
+
+        # parent params should NOT be passed (fixes self-referential parent bug)
         assert (
-            model_run_ids is not None
-        ), "model_run_ids should be non-None for dbt build (from construct_lineage_events)"
-        assert isinstance(model_run_ids, dict), "model_run_ids should be a dict"
+            "parent_run_id" not in construct_call_kwargs
+        ), "construct_test_events should NOT receive parent_run_id (consolidated pattern)"
 
     def test_build_command_propagates_exit_code(
         self, runner: CliRunner, cli_mocks: dict[str, Any]

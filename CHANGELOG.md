@@ -14,11 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Each model lineage event now gets a unique `runId` instead of sharing one
   - Previously, Correlator aggregated all events by `runId`, creating loops when the
     same dataset appeared as both input (dependency) and output (producer)
-  - For `dbt build`: test events now share `runId` with their corresponding model
-  - For `dbt test`: test events continue to use a single shared `runId` (unchanged)
-  - `construct_lineage_events()` now returns `(events, model_run_ids)` tuple
-  - `construct_test_events()` accepts optional `model_run_ids` mapping for correlation
   - Now uses UUID7 (time-ordered) per OpenLineage spec recommendation
+
+- **Critical:** Fix self-referential parent bug in test events (consolidated pattern)
+  - Test events now use a single consolidated `RUNNING` event with multiple inputs
+  - Each input dataset has its own `dataQualityAssertions` facet
+  - Test events no longer include `ParentRunFacet` (was causing self-referential parent)
+  - Extended assertion fields (`durationMs`, `message`) added for richer test metadata
+  - Job name no longer suffixed with dataset name (simpler job hierarchy)
 
 - **Critical:** Add seed support for complete lineage chains
   - Seeds (e.g., `seed.jaffle_shop.raw_customers`) are now included as inputs
@@ -47,11 +50,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added `emit_lineage_events` flag to `WorkflowConfig` for command-specific control
 
 - **Critical:** Add ParentRunFacet for parent-child job correlation
-  - Lineage and test events now include `run.facets.parent` referencing the wrapping job
+  - Lineage events now include `run.facets.parent` referencing the wrapping job
   - Previously, Correlator couldn't link child events (unique `runId`) to wrapping events
   - This caused model jobs to show "RUNNING" status with invalid completion timestamps
   - Required for correct job status display on incident detail page
   - Uses OpenLineage SDK classes (`ParentRunFacet`, `ParentRun`, `ParentJob`) for validation
+  - Note: Test events do NOT have ParentRunFacet (consolidated pattern avoids self-referential parent)
 
 - Fix incorrect PRODUCER URL in OpenLineage events
   - Changed from `https://github.com/correlator-io/dbt-correlator` to

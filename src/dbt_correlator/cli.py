@@ -351,9 +351,6 @@ def execute_workflow(config: WorkflowConfig) -> int:  # noqa: PLR0912, PLR0915
         Emission failures are logged as warnings but don't affect the exit code.
         This ensures lineage is "fire-and-forget" - dbt execution is primary.
     """
-    # UUID7 per OpenLineage spec recommendation (time-ordered)
-    # This is used for wrapping events and as fallback for dbt test command.
-    # Per-model lineage events get unique runIds generated in construct_lineage_events().
     wrapping_run_id = str(uuid7())
     dbt_exit_code = 0
     manifest = None  # Will be parsed once and reused
@@ -404,7 +401,6 @@ def execute_workflow(config: WorkflowConfig) -> int:  # noqa: PLR0912, PLR0915
     # Test command only emits test events - tests validate inputs, don't produce outputs
     lineage_events: list[Any] = []
     model_ids: set[str] = set()
-    model_run_ids: dict[str, str] = {}  # Mapping: model_unique_id -> runId
     if config.emit_lineage_events:
         # Determine which models to emit lineage for
         model_ids = get_executed_models(run_results)
@@ -423,7 +419,7 @@ def execute_workflow(config: WorkflowConfig) -> int:  # noqa: PLR0912, PLR0915
 
         # Construct lineage events (each model gets unique runId)
         event_time = datetime.now(timezone.utc).isoformat()
-        lineage_events, model_run_ids = construct_lineage_events(
+        lineage_events = construct_lineage_events(
             model_lineages=model_lineages,
             job_namespace=config.job_namespace,
             producer=PRODUCER,
@@ -435,8 +431,8 @@ def execute_workflow(config: WorkflowConfig) -> int:  # noqa: PLR0912, PLR0915
         )
 
     # 9. Construct test events (only for test/build commands)
-    # For dbt build: tests share runId with their model (via model_run_ids mapping)
-    # For dbt test: tests use wrapping_run_id as fallback (single shared runId)
+    # Consolidated pattern: single event with all test inputs
+    # No parent params - test events don't have parent relationship
     test_events: list[Any] = []
     if config.emit_test_events:
         test_events = construct_test_events(
@@ -446,10 +442,6 @@ def execute_workflow(config: WorkflowConfig) -> int:  # noqa: PLR0912, PLR0915
             job_name=job_name,
             run_id=wrapping_run_id,
             namespace_override=config.dataset_namespace,
-            model_run_ids=model_run_ids if model_run_ids else None,
-            parent_run_id=wrapping_run_id,
-            parent_job_namespace=config.job_namespace,
-            parent_job_name=job_name,
         )
 
     # 10. Create terminal event (COMPLETE or FAIL)

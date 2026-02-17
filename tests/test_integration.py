@@ -1159,17 +1159,20 @@ class TestParentRunFacetIntegration:
             assert "_schemaURL" in parent, "parent should have _schemaURL"
             assert "ParentRunFacet" in parent["_schemaURL"]
 
-    def test_test_command_test_events_have_parent_facet(
+    def test_test_command_test_events_no_parent_facet(
         self,
         runner: CliRunner,
         mock_dbt_project_dir: Path,
         mock_correlator_success: responses.RequestsMock,
     ) -> None:
-        """Test that dbt test events include ParentRunFacet.
+        """Test that dbt test events do NOT include ParentRunFacet.
+
+        Consolidated pattern fix: Test events no longer have parent facet
+        to avoid self-referential parent bug.
 
         Validates:
-            - Test events (RUNNING with dataQualityAssertions) have run.facets.parent
-            - Parent facet references the wrapping job's runId
+            - Test events (RUNNING with dataQualityAssertions) have NO run.facets.parent
+            - Single consolidated event with multiple inputs
         """
         result = runner.invoke(
             cli,
@@ -1187,10 +1190,6 @@ class TestParentRunFacetIntegration:
 
         assert result.exit_code == 0, f"CLI failed with: {result.output}"
 
-        # Get START event to find wrapping runId
-        start_events = parse_request_body(mock_correlator_success.calls[0].request)
-        wrapping_run_id = start_events[0]["run"]["runId"]
-
         # Get batch events (test + terminal)
         batch_events = parse_request_body(mock_correlator_success.calls[1].request)
 
@@ -1206,32 +1205,27 @@ class TestParentRunFacetIntegration:
             )
         ]
 
-        assert len(test_events) > 0, "Should have at least one test event"
+        # Consolidated pattern: single event with multiple inputs
+        assert len(test_events) == 1, "Should have exactly one consolidated test event"
 
-        for event in test_events:
-            # Verify parent facet exists
-            assert event["run"].get("facets") is not None, "run.facets should exist"
-            assert "parent" in event["run"]["facets"], "parent facet should exist"
+        event = test_events[0]
+        # Verify NO parent facet (fixes self-referential parent bug)
+        facets = event["run"].get("facets")
+        assert (
+            facets is None or "parent" not in facets
+        ), "Test events should NOT have parent facet (consolidated pattern)"
 
-            parent = event["run"]["facets"]["parent"]
-
-            # Verify parent references wrapping job
-            assert (
-                parent["run"]["runId"] == wrapping_run_id
-            ), "parent.run.runId should match wrapping runId"
-
-    def test_build_command_all_child_events_reference_same_parent(
+    def test_build_command_lineage_events_have_parent_test_events_do_not(
         self,
         runner: CliRunner,
         mock_dbt_project_dir_with_model_results: Path,
         mock_correlator_success: responses.RequestsMock,
     ) -> None:
-        """Test that dbt build child events all reference the same parent.
+        """Test that dbt build lineage events have parent, test events do not.
 
-        Validates:
-            - All RUNNING events (lineage or test) have parent facet
-            - All parent facets reference the same wrapping job
-            - Creates correct shallow hierarchy
+        Consolidated pattern:
+            - Lineage events (model runs) have ParentRunFacet
+            - Test events do NOT have ParentRunFacet (fixes self-referential bug)
         """
         result = runner.invoke(
             cli,
@@ -1259,22 +1253,39 @@ class TestParentRunFacetIntegration:
         batch_events = parse_request_body(mock_correlator_success.calls[1].request)
 
         # Find all RUNNING events (lineage + test, not terminal)
-        child_events = [e for e in batch_events if e["eventType"] == "RUNNING"]
+        running_events = [e for e in batch_events if e["eventType"] == "RUNNING"]
 
-        assert len(child_events) > 0, "Should have at least one child event"
+        assert len(running_events) > 0, "Should have at least one RUNNING event"
 
-        # All child events should reference the same parent
-        for event in child_events:
+        # Separate lineage events (have outputs) from test events (have dataQualityAssertions)
+        lineage_events = [e for e in running_events if e.get("outputs")]
+        test_events = [
+            e
+            for e in running_events
+            if e.get("inputs")
+            and any(
+                "dataQualityAssertions" in inp.get("inputFacets", {})
+                for inp in e["inputs"]
+            )
+        ]
+
+        # Lineage events should have parent facet
+        for event in lineage_events:
             assert (
                 event["run"].get("facets") is not None
-            ), f"run.facets missing in event for job {event['job']['name']}"
+            ), f"run.facets missing in lineage event for job {event['job']['name']}"
             assert (
                 "parent" in event["run"]["facets"]
-            ), f"parent facet missing in event for job {event['job']['name']}"
+            ), f"parent facet missing in lineage event for job {event['job']['name']}"
 
             parent = event["run"]["facets"]["parent"]
-
-            # All should reference same wrapping job
             assert parent["run"]["runId"] == wrapping_run_id
             assert parent["job"]["name"] == wrapping_job_name
             assert parent["job"]["namespace"] == wrapping_job_namespace
+
+        # Test events should NOT have parent facet (consolidated pattern)
+        for event in test_events:
+            facets = event["run"].get("facets")
+            assert (
+                facets is None or "parent" not in facets
+            ), f"Test event for job {event['job']['name']} should NOT have parent facet"
