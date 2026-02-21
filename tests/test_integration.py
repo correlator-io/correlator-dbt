@@ -1159,16 +1159,16 @@ class TestParentRunFacetIntegration:
             assert "_schemaURL" in parent, "parent should have _schemaURL"
             assert "ParentRunFacet" in parent["_schemaURL"]
 
-    def test_test_command_test_events_no_parent_facet(
+    def test_test_command_test_events_no_parent_when_standalone(
         self,
         runner: CliRunner,
         mock_dbt_project_dir: Path,
         mock_correlator_success: responses.RequestsMock,
     ) -> None:
-        """Test that dbt test events do NOT include ParentRunFacet.
+        """Test that dbt test events have no ParentRunFacet when standalone.
 
-        Consolidated pattern fix: Test events no longer have parent facet
-        to avoid self-referential parent bug.
+        When not orchestrated (no OPENLINEAGE_PARENT_ID), test events
+        should have no parent facet.
 
         Validates:
             - Test events (RUNNING with dataQualityAssertions) have NO run.facets.parent
@@ -1209,23 +1209,23 @@ class TestParentRunFacetIntegration:
         assert len(test_events) == 1, "Should have exactly one consolidated test event"
 
         event = test_events[0]
-        # Verify NO parent facet (fixes self-referential parent bug)
+        # Verify NO parent facet when standalone (not orchestrated)
         facets = event["run"].get("facets")
         assert (
             facets is None or "parent" not in facets
-        ), "Test events should NOT have parent facet (consolidated pattern)"
+        ), "Test events should NOT have parent facet when standalone"
 
-    def test_build_command_lineage_events_have_parent_test_events_do_not(
+    def test_build_command_lineage_parent_is_wrapping_test_parent_absent_standalone(
         self,
         runner: CliRunner,
         mock_dbt_project_dir_with_model_results: Path,
         mock_correlator_success: responses.RequestsMock,
     ) -> None:
-        """Test that dbt build lineage events have parent, test events do not.
+        """Test parent hierarchy in build command when standalone (no orchestrator).
 
-        Consolidated pattern:
-            - Lineage events (model runs) have ParentRunFacet
-            - Test events do NOT have ParentRunFacet (fixes self-referential bug)
+        When not orchestrated:
+            - Lineage events (separate jobs) have parent = wrapping job
+            - Test events (same job as wrapping) have no parent
         """
         result = runner.invoke(
             cli,
@@ -1269,7 +1269,7 @@ class TestParentRunFacetIntegration:
             )
         ]
 
-        # Lineage events should have parent facet
+        # Lineage events: parent = wrapping job (separate jobs with unique run_ids)
         for event in lineage_events:
             assert (
                 event["run"].get("facets") is not None
@@ -1283,9 +1283,9 @@ class TestParentRunFacetIntegration:
             assert parent["job"]["name"] == wrapping_job_name
             assert parent["job"]["namespace"] == wrapping_job_namespace
 
-        # Test events should NOT have parent facet (consolidated pattern)
+        # Test events: no parent when standalone (not orchestrated)
         for event in test_events:
             facets = event["run"].get("facets")
             assert (
                 facets is None or "parent" not in facets
-            ), f"Test event for job {event['job']['name']} should NOT have parent facet"
+            ), "Test event should NOT have parent facet when standalone"

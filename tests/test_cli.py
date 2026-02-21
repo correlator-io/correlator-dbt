@@ -25,7 +25,8 @@ from click.testing import CliRunner
 from openlineage.client.event_v2 import RunEvent
 
 from dbt_correlator import __version__
-from dbt_correlator.cli import cli, get_default_job_name
+from dbt_correlator.cli import cli, get_default_job_name, get_parent_run_metadata
+from dbt_correlator.emitter import ParentRunMetadata
 from dbt_correlator.parser import Manifest, RunResults, RunResultsMetadata, TestResult
 
 # =============================================================================
@@ -1685,3 +1686,243 @@ class TestTestCommandNoLineageEmission:
             call_kwargs.get("namespace_override")
             == "postgresql://mydb.example.com:5432/analytics"
         )
+
+
+# =============================================================================
+# Tests for get_parent_run_metadata()
+# =============================================================================
+
+
+@pytest.mark.unit
+class TestGetParentRunMetadata:
+    """Tests for reading orchestrator parent context from environment variables.
+
+    Validates parsing of OPENLINEAGE_PARENT_ID and OPENLINEAGE_ROOT_PARENT_ID
+    environment variables set by Airflow's Jinja macros.
+    """
+
+    def test_reads_parent_id_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that OPENLINEAGE_PARENT_ID is correctly parsed."""
+        monkeypatch.setenv(
+            "OPENLINEAGE_PARENT_ID",
+            "airflow/demo_pipeline.dbt_test/019c7c79-b160-7c2f-8ad4-a026c5a82b5a",
+        )
+        # Ensure root is not set (test parent-only behavior with fallback)
+        monkeypatch.delenv("OPENLINEAGE_ROOT_PARENT_ID", raising=False)
+
+        result = get_parent_run_metadata()
+
+        assert result is not None
+        assert result.job_namespace == "airflow"
+        assert result.job_name == "demo_pipeline.dbt_test"
+        assert result.run_id == "019c7c79-b160-7c2f-8ad4-a026c5a82b5a"
+
+    def test_returns_none_when_not_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test returns None when not orchestrated (standalone CLI)."""
+        monkeypatch.delenv("OPENLINEAGE_PARENT_ID", raising=False)
+        monkeypatch.delenv("OPENLINEAGE_ROOT_PARENT_ID", raising=False)
+
+        result = get_parent_run_metadata()
+
+        assert result is None
+
+    def test_returns_none_on_malformed_input(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test returns None and warns on malformed OPENLINEAGE_PARENT_ID."""
+        monkeypatch.setenv("OPENLINEAGE_PARENT_ID", "invalid-format")
+
+        result = get_parent_run_metadata()
+
+        assert result is None
+
+    def test_returns_none_on_too_many_parts(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test returns None when namespace contains '/' (URL-style)."""
+        monkeypatch.setenv(
+            "OPENLINEAGE_PARENT_ID",
+            "http://airflow:8080/dag.task/some-uuid",
+        )
+
+        result = get_parent_run_metadata()
+
+        assert result is None
+
+    def test_reads_root_parent_id(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that OPENLINEAGE_ROOT_PARENT_ID is correctly parsed."""
+        monkeypatch.setenv(
+            "OPENLINEAGE_PARENT_ID",
+            "airflow/demo_pipeline.dbt_test/019c7c79-b160-7c2f-8ad4-a026c5a82b5a",
+        )
+        monkeypatch.setenv(
+            "OPENLINEAGE_ROOT_PARENT_ID",
+            "airflow/demo_pipeline/019c7c79-aaaa-bbbb-cccc-111122223333",
+        )
+
+        result = get_parent_run_metadata()
+
+        assert result is not None
+        assert result.root_run_id == "019c7c79-aaaa-bbbb-cccc-111122223333"
+        assert result.root_job_namespace == "airflow"
+        assert result.root_job_name == "demo_pipeline"
+
+    def test_root_falls_back_to_parent_when_not_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test that root defaults to parent values when ROOT env var is unset.
+
+        This matches dbt-ol behavior: when OPENLINEAGE_ROOT_PARENT_ID is not
+        set, the parent values are reused as root.
+        """
+        monkeypatch.setenv(
+            "OPENLINEAGE_PARENT_ID",
+            "airflow/demo_pipeline.dbt_test/019c7c79-b160-7c2f-8ad4-a026c5a82b5a",
+        )
+        monkeypatch.delenv("OPENLINEAGE_ROOT_PARENT_ID", raising=False)
+
+        result = get_parent_run_metadata()
+
+        assert result is not None
+        # Root should fall back to parent values
+        assert result.root_run_id == "019c7c79-b160-7c2f-8ad4-a026c5a82b5a"
+        assert result.root_job_namespace == "airflow"
+        assert result.root_job_name == "demo_pipeline.dbt_test"
+
+    def test_root_none_on_malformed_root(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that malformed ROOT env var results in None root fields."""
+        monkeypatch.setenv(
+            "OPENLINEAGE_PARENT_ID",
+            "airflow/demo_pipeline.dbt_test/019c7c79-b160-7c2f-8ad4-a026c5a82b5a",
+        )
+        monkeypatch.setenv("OPENLINEAGE_ROOT_PARENT_ID", "malformed-value")
+
+        result = get_parent_run_metadata()
+
+        assert result is not None
+        # Parent should still be parsed
+        assert result.job_namespace == "airflow"
+        # Root should be None due to malformed input
+        assert result.root_run_id is None
+        assert result.root_job_namespace is None
+        assert result.root_job_name is None
+
+    def test_returns_none_on_empty_string(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test returns None when OPENLINEAGE_PARENT_ID is empty string."""
+        monkeypatch.setenv("OPENLINEAGE_PARENT_ID", "")
+
+        result = get_parent_run_metadata()
+
+        assert result is None
+
+
+# =============================================================================
+# Tests for execute_workflow() orchestrator parent integration
+# =============================================================================
+
+
+@pytest.mark.unit
+class TestWorkflowOrchestratorParent:
+    """Tests for orchestrator parent context in execute_workflow().
+
+    Validates that OPENLINEAGE_PARENT_ID is read and passed to wrapping events.
+    """
+
+    def test_workflow_passes_orchestrator_parent_to_wrapping_events(
+        self,
+        runner: CliRunner,
+        cli_mocks: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Test that wrapping events include parent when env var is set."""
+        monkeypatch.setenv(
+            "OPENLINEAGE_PARENT_ID",
+            "airflow/demo_pipeline.dbt_test/019c7c79-b160-7c2f-8ad4-a026c5a82b5a",
+        )
+        monkeypatch.delenv("OPENLINEAGE_ROOT_PARENT_ID", raising=False)
+
+        runner.invoke(
+            cli,
+            [
+                "test",
+                "--correlator-endpoint",
+                "http://localhost:8080/api/v1/lineage/events",
+            ],
+        )
+
+        # Both START and terminal wrapping events should have parent
+        assert cli_mocks["wrapping"].call_count == 2
+
+        for call in cli_mocks["wrapping"].call_args_list:
+            kwargs = call[1] if call[1] else {}
+            parent = kwargs.get("parent")
+            assert parent is not None
+            assert isinstance(parent, ParentRunMetadata)
+            assert parent.run_id == "019c7c79-b160-7c2f-8ad4-a026c5a82b5a"
+            assert parent.job_namespace == "airflow"
+            assert parent.job_name == "demo_pipeline.dbt_test"
+            # Root falls back to parent when ROOT env var not set
+            assert parent.root_run_id == "019c7c79-b160-7c2f-8ad4-a026c5a82b5a"
+            assert parent.root_job_namespace == "airflow"
+            assert parent.root_job_name == "demo_pipeline.dbt_test"
+
+    def test_workflow_passes_separate_root_parent(
+        self,
+        runner: CliRunner,
+        cli_mocks: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Test that separate root parent is passed when both env vars are set."""
+        monkeypatch.setenv(
+            "OPENLINEAGE_PARENT_ID",
+            "airflow/demo_pipeline.dbt_test/019c7c79-b160-7c2f-8ad4-a026c5a82b5a",
+        )
+        monkeypatch.setenv(
+            "OPENLINEAGE_ROOT_PARENT_ID",
+            "airflow/demo_pipeline/019c7c79-aaaa-bbbb-cccc-111122223333",
+        )
+
+        runner.invoke(
+            cli,
+            [
+                "test",
+                "--correlator-endpoint",
+                "http://localhost:8080/api/v1/lineage/events",
+            ],
+        )
+
+        for call in cli_mocks["wrapping"].call_args_list:
+            kwargs = call[1] if call[1] else {}
+            parent = kwargs.get("parent")
+            assert parent is not None
+            # Parent should be the task
+            assert parent.run_id == "019c7c79-b160-7c2f-8ad4-a026c5a82b5a"
+            assert parent.job_name == "demo_pipeline.dbt_test"
+            # Root should be the DAG
+            assert parent.root_run_id == "019c7c79-aaaa-bbbb-cccc-111122223333"
+            assert parent.root_job_name == "demo_pipeline"
+
+    def test_workflow_no_parent_when_env_not_set(
+        self,
+        runner: CliRunner,
+        cli_mocks: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Test that wrapping events have no parent when standalone."""
+        monkeypatch.delenv("OPENLINEAGE_PARENT_ID", raising=False)
+        monkeypatch.delenv("OPENLINEAGE_ROOT_PARENT_ID", raising=False)
+
+        runner.invoke(
+            cli,
+            [
+                "test",
+                "--correlator-endpoint",
+                "http://localhost:8080/api/v1/lineage/events",
+            ],
+        )
+
+        for call in cli_mocks["wrapping"].call_args_list:
+            kwargs = call[1] if call[1] else {}
+            assert kwargs.get("parent") is None

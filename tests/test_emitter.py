@@ -26,6 +26,7 @@ import requests
 from openlineage.client.event_v2 import RunState
 
 from dbt_correlator.emitter import (
+    ParentRunMetadata,
     _build_parent_facet,
     _serialize_event_with_extended_fields,
     construct_lineage_event,
@@ -400,6 +401,74 @@ class TestCreateWrappingEvent:
         assert event.run.runId == run_id
         assert len(event.inputs) == 0
         assert len(event.outputs) == 0
+
+    def test_wrapping_event_includes_parent_facet(self) -> None:
+        """Test wrapping event has ParentRunFacet when parent params provided."""
+        run_id = str(uuid.uuid4())
+        timestamp = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+        event = create_wrapping_event(
+            event_type="START",
+            run_id=run_id,
+            job_name="jaffle_shop.test",
+            job_namespace="dbt://demo",
+            timestamp=timestamp,
+            parent=ParentRunMetadata(
+                run_id="550e8400-e29b-41d4-a716-446655440000",
+                job_namespace="airflow",
+                job_name="demo_pipeline.dbt_test",
+            ),
+        )
+
+        assert event.run.facets is not None
+        assert "parent" in event.run.facets
+        parent = event.run.facets["parent"]
+        assert parent.run.runId == "550e8400-e29b-41d4-a716-446655440000"
+        assert parent.job.namespace == "airflow"
+        assert parent.job.name == "demo_pipeline.dbt_test"
+
+    def test_wrapping_event_includes_parent_and_root(self) -> None:
+        """Test wrapping event has both parent and root when all params provided."""
+        run_id = str(uuid.uuid4())
+        timestamp = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+        event = create_wrapping_event(
+            event_type="START",
+            run_id=run_id,
+            job_name="jaffle_shop.test",
+            job_namespace="dbt://demo",
+            timestamp=timestamp,
+            parent=ParentRunMetadata(
+                run_id="550e8400-e29b-41d4-a716-446655440000",
+                job_namespace="airflow",
+                job_name="demo_pipeline.dbt_test",
+                root_run_id="660f9500-f30c-52e5-b827-557766551111",
+                root_job_namespace="airflow",
+                root_job_name="demo_pipeline",
+            ),
+        )
+
+        assert event.run.facets is not None
+        parent = event.run.facets["parent"]
+        assert parent.run.runId == "550e8400-e29b-41d4-a716-446655440000"
+        assert parent.root is not None
+        assert parent.root.run.runId == "660f9500-f30c-52e5-b827-557766551111"
+        assert parent.root.job.name == "demo_pipeline"
+
+    def test_wrapping_event_no_parent_when_standalone(self) -> None:
+        """Test wrapping event has no ParentRunFacet when running standalone."""
+        run_id = str(uuid.uuid4())
+        timestamp = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+        event = create_wrapping_event(
+            event_type="START",
+            run_id=run_id,
+            job_name="jaffle_shop.test",
+            job_namespace="dbt://demo",
+            timestamp=timestamp,
+        )
+
+        assert event.run.facets is None or "parent" not in event.run.facets
 
 
 # ============================================================================
@@ -1752,9 +1821,11 @@ class TestBuildParentFacet:
             - Producer is set correctly
         """
         facet = _build_parent_facet(
-            parent_run_id="550e8400-e29b-41d4-a716-446655440000",
-            parent_job_namespace="dbt://demo",
-            parent_job_name="jaffle_shop.build",
+            parent=ParentRunMetadata(
+                run_id="550e8400-e29b-41d4-a716-446655440000",
+                job_namespace="dbt://demo",
+                job_name="jaffle_shop.build",
+            ),
             producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
         )
 
@@ -1770,9 +1841,11 @@ class TestBuildParentFacet:
         """
         with pytest.raises(ValueError, match="badly formed"):
             _build_parent_facet(
-                parent_run_id="not-a-valid-uuid",
-                parent_job_namespace="dbt://demo",
-                parent_job_name="jaffle_shop.build",
+                parent=ParentRunMetadata(
+                    run_id="not-a-valid-uuid",
+                    job_namespace="dbt://demo",
+                    job_name="jaffle_shop.build",
+                ),
                 producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
             )
 
@@ -1785,9 +1858,11 @@ class TestBuildParentFacet:
             - root: Optional field, serializes as null if not set
         """
         facet = _build_parent_facet(
-            parent_run_id="550e8400-e29b-41d4-a716-446655440000",
-            parent_job_namespace="dbt://demo",
-            parent_job_name="jaffle_shop.build",
+            parent=ParentRunMetadata(
+                run_id="550e8400-e29b-41d4-a716-446655440000",
+                job_namespace="dbt://demo",
+                job_name="jaffle_shop.build",
+            ),
             producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
         )
 
@@ -1816,9 +1891,11 @@ class TestBuildParentFacet:
         https://openlineage.io/spec/facets/1-1-0/ParentRunFacet.json#/$defs/ParentRunFacet
         """
         facet = _build_parent_facet(
-            parent_run_id="550e8400-e29b-41d4-a716-446655440000",
-            parent_job_namespace="dbt://demo",
-            parent_job_name="jaffle_shop.build",
+            parent=ParentRunMetadata(
+                run_id="550e8400-e29b-41d4-a716-446655440000",
+                job_namespace="dbt://demo",
+                job_name="jaffle_shop.build",
+            ),
             producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
         )
 
@@ -1831,6 +1908,96 @@ class TestBuildParentFacet:
 
         expected_url = "https://openlineage.io/spec/facets/1-1-0/ParentRunFacet.json"
         assert expected_url in facet_dict["_schemaURL"]
+
+    def test_root_included_when_all_root_params_provided(self) -> None:
+        """Test that Root is included in facet when all root params are provided."""
+        facet = _build_parent_facet(
+            parent=ParentRunMetadata(
+                run_id="550e8400-e29b-41d4-a716-446655440000",
+                job_namespace="airflow",
+                job_name="demo_pipeline.dbt_test",
+                root_run_id="660f9500-f30c-52e5-b827-557766551111",
+                root_job_namespace="airflow",
+                root_job_name="demo_pipeline",
+            ),
+            producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
+        )
+
+        assert facet.root is not None
+        assert facet.root.run.runId == "660f9500-f30c-52e5-b827-557766551111"
+        assert facet.root.job.namespace == "airflow"
+        assert facet.root.job.name == "demo_pipeline"
+
+    def test_root_not_included_when_root_params_none(self) -> None:
+        """Test that Root is None when no root params are provided (default)."""
+        facet = _build_parent_facet(
+            parent=ParentRunMetadata(
+                run_id="550e8400-e29b-41d4-a716-446655440000",
+                job_namespace="dbt://demo",
+                job_name="jaffle_shop.build",
+            ),
+            producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
+        )
+
+        assert facet.root is None
+
+    def test_root_not_included_when_partial_root_params(self) -> None:
+        """Test that Root is None when only some root params are provided."""
+        facet = _build_parent_facet(
+            parent=ParentRunMetadata(
+                run_id="550e8400-e29b-41d4-a716-446655440000",
+                job_namespace="dbt://demo",
+                job_name="jaffle_shop.build",
+                root_run_id="660f9500-f30c-52e5-b827-557766551111",
+                # root_job_namespace and root_job_name default to None
+            ),
+            producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
+        )
+
+        assert facet.root is None
+
+    def test_root_serializes_correctly(self) -> None:
+        """Test that root section serializes with correct structure."""
+        facet = _build_parent_facet(
+            parent=ParentRunMetadata(
+                run_id="550e8400-e29b-41d4-a716-446655440000",
+                job_namespace="airflow",
+                job_name="demo_pipeline.dbt_test",
+                root_run_id="660f9500-f30c-52e5-b827-557766551111",
+                root_job_namespace="airflow",
+                root_job_name="demo_pipeline",
+            ),
+            producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
+        )
+
+        def serialize(inst, field, value):
+            if isinstance(value, Enum):
+                return value.value
+            return value
+
+        facet_dict = attr.asdict(facet, value_serializer=serialize)  # type: ignore[call-arg]
+
+        assert facet_dict["root"] is not None
+        assert (
+            facet_dict["root"]["run"]["runId"] == "660f9500-f30c-52e5-b827-557766551111"
+        )
+        assert facet_dict["root"]["job"]["namespace"] == "airflow"
+        assert facet_dict["root"]["job"]["name"] == "demo_pipeline"
+
+    def test_root_invalid_uuid_raises_value_error(self) -> None:
+        """Test that invalid root UUID raises ValueError from SDK validation."""
+        with pytest.raises(ValueError, match="badly formed"):
+            _build_parent_facet(
+                parent=ParentRunMetadata(
+                    run_id="550e8400-e29b-41d4-a716-446655440000",
+                    job_namespace="airflow",
+                    job_name="demo_pipeline.dbt_test",
+                    root_run_id="not-a-valid-uuid",
+                    root_job_namespace="airflow",
+                    root_job_name="demo_pipeline",
+                ),
+                producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
+            )
 
 
 @pytest.mark.unit
@@ -1870,9 +2037,11 @@ class TestConstructLineageEventWithParent:
             job_namespace="dbt://demo",
             producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
             event_time="2024-01-01T12:00:00Z",
-            parent_run_id="550e8400-e29b-41d4-a716-446655440000",
-            parent_job_namespace="dbt://demo",
-            parent_job_name="jaffle_shop.build",
+            parent=ParentRunMetadata(
+                run_id="550e8400-e29b-41d4-a716-446655440000",
+                job_namespace="dbt://demo",
+                job_name="jaffle_shop.build",
+            ),
         )
 
         assert event.run.facets is not None
@@ -1903,26 +2072,6 @@ class TestConstructLineageEventWithParent:
         # run.facets should be None or empty
         assert event.run.facets is None or len(event.run.facets) == 0
 
-    def test_parent_facet_not_included_when_partial_params(
-        self, sample_model_lineage
-    ) -> None:
-        """Test that ParentRunFacet is NOT included when only some params provided.
-
-        All three parent params must be provided together.
-        Partial params should not create a facet.
-        """
-        event = construct_lineage_event(
-            model_lineage=sample_model_lineage,
-            run_id="660f9500-f30c-52e5-b827-557766551111",
-            job_namespace="dbt://demo",
-            producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
-            event_time="2024-01-01T12:00:00Z",
-            parent_run_id="550e8400-e29b-41d4-a716-446655440000",
-            # Missing parent_job_namespace and parent_job_name
-        )
-
-        assert event.run.facets is None or "parent" not in event.run.facets
-
     def test_parent_facet_serializes_correctly(self, sample_model_lineage) -> None:
         """Test that event with parent facet serializes to correct JSON structure.
 
@@ -1934,9 +2083,11 @@ class TestConstructLineageEventWithParent:
             job_namespace="dbt://demo",
             producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
             event_time="2024-01-01T12:00:00Z",
-            parent_run_id="550e8400-e29b-41d4-a716-446655440000",
-            parent_job_namespace="dbt://demo",
-            parent_job_name="jaffle_shop.build",
+            parent=ParentRunMetadata(
+                run_id="550e8400-e29b-41d4-a716-446655440000",
+                job_namespace="dbt://demo",
+                job_name="jaffle_shop.build",
+            ),
         )
 
         # Serialize event
@@ -2007,9 +2158,11 @@ class TestConstructLineageEventsWithParent:
             job_namespace="dbt://demo",
             producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
             event_time="2024-01-01T12:00:00Z",
-            parent_run_id="550e8400-e29b-41d4-a716-446655440000",
-            parent_job_namespace="dbt://demo",
-            parent_job_name="jaffle_shop.build",
+            parent=ParentRunMetadata(
+                run_id="550e8400-e29b-41d4-a716-446655440000",
+                job_namespace="dbt://demo",
+                job_name="jaffle_shop.build",
+            ),
         )
 
         assert len(events) == 2
@@ -2077,8 +2230,10 @@ class TestConstructTestEventsConsolidatedPattern:
         # Should have multiple inputs (one per dataset with tests)
         assert len(event.inputs) > 0, "Should have at least one input dataset"
 
-    def test_no_parent_facet(self, sample_run_results, sample_manifest) -> None:
-        """Test that test events have no ParentRunFacet (fixes self-ref bug)."""
+    def test_no_parent_when_standalone(
+        self, sample_run_results, sample_manifest
+    ) -> None:
+        """Test that test events have no ParentRunFacet when not orchestrated."""
         events = construct_test_events(
             run_results=sample_run_results,
             manifest=sample_manifest,
@@ -2089,9 +2244,45 @@ class TestConstructTestEventsConsolidatedPattern:
 
         assert len(events) == 1
         event = events[0]
-
-        # No parent facet - this fixes the self-referential parent bug
         assert event.run.facets is None or "parent" not in event.run.facets
+
+    def test_includes_orchestrator_parent(
+        self, sample_run_results, sample_manifest
+    ) -> None:
+        """Test that test events include ParentRunFacet when orchestrated.
+
+        Test events share the wrapping job's identity (same run_id, job_name).
+        When orchestrated, they should carry the orchestrator as parent,
+        consistent with the wrapping event's parent.
+        """
+        orchestrator = ParentRunMetadata(
+            run_id="019c7c79-b160-7c2f-8ad4-a026c5a82b5a",
+            job_namespace="airflow",
+            job_name="demo_pipeline.dbt_test",
+            root_run_id="019c7c79-aaaa-bbbb-cccc-111122223333",
+            root_job_namespace="airflow",
+            root_job_name="demo_pipeline",
+        )
+
+        events = construct_test_events(
+            run_results=sample_run_results,
+            manifest=sample_manifest,
+            job_namespace="dbt://demo",
+            job_name="jaffle_shop.test",
+            run_id="550e8400-e29b-41d4-a716-446655440000",
+            parent=orchestrator,
+        )
+
+        assert len(events) == 1
+        event = events[0]
+        assert event.run.facets is not None
+        assert "parent" in event.run.facets
+        parent = event.run.facets["parent"]
+        assert parent.run.runId == "019c7c79-b160-7c2f-8ad4-a026c5a82b5a"
+        assert parent.job.namespace == "airflow"
+        assert parent.job.name == "demo_pipeline.dbt_test"
+        assert parent.root is not None
+        assert parent.root.run.runId == "019c7c79-aaaa-bbbb-cccc-111122223333"
 
     def test_extended_fields_stored_on_facet(
         self, sample_run_results, sample_manifest

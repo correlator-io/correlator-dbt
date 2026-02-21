@@ -19,6 +19,7 @@ The CLI follows Click conventions and integrates with the correlator ecosystem
 using the same patterns as other correlator plugins.
 """
 
+import logging
 import os
 import subprocess
 import sys
@@ -40,6 +41,7 @@ from .config import (
 )
 from .emitter import (
     PRODUCER,
+    ParentRunMetadata,
     construct_lineage_events,
     construct_test_events,
     create_wrapping_event,
@@ -52,6 +54,8 @@ from .parser import (
     parse_manifest,
     parse_run_results,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -285,6 +289,65 @@ def get_api_key_with_fallback() -> Optional[str]:
     return os.environ.get("CORRELATOR_API_KEY") or os.environ.get("OPENLINEAGE_API_KEY")
 
 
+def get_parent_run_metadata() -> Optional[ParentRunMetadata]:
+    """Read parent run context from OPENLINEAGE_PARENT_ID environment variable.
+
+    Format: "{namespace}/{job_name}/{run_id}" — the same format produced by
+    Airflow's lineage_parent_id() macro. Also reads OPENLINEAGE_ROOT_PARENT_ID
+    for DAG-level root tracking.
+
+    When OPENLINEAGE_ROOT_PARENT_ID is not set, parent values are reused as
+    root.
+
+    Limitation: Namespaces containing "/" (e.g., URLs) will cause parsing to
+    fail gracefully. Airflow defaults to simple string namespaces (e.g., "default").
+
+    Returns:
+        ParentRunMetadata if OPENLINEAGE_PARENT_ID is set and valid, else None.
+    """
+    parent_id = os.getenv("OPENLINEAGE_PARENT_ID")
+    if not parent_id:
+        return None
+
+    parts = parent_id.split("/")
+    if len(parts) != 3:
+        logger.warning(
+            "OPENLINEAGE_PARENT_ID cannot be parsed "
+            "(expected 'namespace/job_name/run_id'): %s",
+            parent_id,
+        )
+        return None
+
+    namespace, job_name, run_id = parts
+
+    # Parse optional root parent (Airflow DAG-level)
+    root_run_id = root_job_name = root_job_namespace = None
+    root_parent_id = os.getenv("OPENLINEAGE_ROOT_PARENT_ID")
+    if root_parent_id:
+        root_parts = root_parent_id.split("/")
+        if len(root_parts) == 3:
+            root_job_namespace, root_job_name, root_run_id = root_parts
+        else:
+            logger.warning(
+                "OPENLINEAGE_ROOT_PARENT_ID cannot be parsed: %s",
+                root_parent_id,
+            )
+    else:
+        # dbt-ol fallback: when root not set, parent becomes root
+        root_run_id = run_id
+        root_job_name = job_name
+        root_job_namespace = namespace
+
+    return ParentRunMetadata(
+        run_id=run_id,
+        job_name=job_name,
+        job_namespace=namespace,
+        root_run_id=root_run_id,
+        root_job_name=root_job_name,
+        root_job_namespace=root_job_namespace,
+    )
+
+
 def resolve_credentials(
     endpoint: Optional[str],
     api_key: Optional[str],
@@ -355,6 +418,9 @@ def execute_workflow(config: WorkflowConfig) -> int:  # noqa: PLR0912, PLR0915
     dbt_exit_code = 0
     manifest = None  # Will be parsed once and reused
 
+    # 0. Read orchestrator parent context (Airflow, etc.)
+    orchestrator_parent = get_parent_run_metadata()
+
     # 1. Resolve job name (parse manifest if needed)
     job_name = config.job_name
     if not job_name:
@@ -367,7 +433,12 @@ def execute_workflow(config: WorkflowConfig) -> int:  # noqa: PLR0912, PLR0915
     # 2. Create and emit START event immediately
     start_timestamp = datetime.now(timezone.utc)
     start_event = create_wrapping_event(
-        "START", wrapping_run_id, job_name, config.job_namespace, start_timestamp
+        "START",
+        wrapping_run_id,
+        job_name,
+        config.job_namespace,
+        start_timestamp,
+        parent=orchestrator_parent,
     )
     try:
         emit_events([start_event], config.endpoint, config.api_key)
@@ -419,20 +490,23 @@ def execute_workflow(config: WorkflowConfig) -> int:  # noqa: PLR0912, PLR0915
 
         # Construct lineage events (each model gets unique runId)
         event_time = datetime.now(timezone.utc).isoformat()
+        wrapping_parent = ParentRunMetadata(
+            run_id=wrapping_run_id,
+            job_name=job_name,
+            job_namespace=config.job_namespace,
+        )
         lineage_events = construct_lineage_events(
             model_lineages=model_lineages,
             job_namespace=config.job_namespace,
             producer=PRODUCER,
             event_time=event_time,
             execution_results=execution_results,
-            parent_run_id=wrapping_run_id,
-            parent_job_namespace=config.job_namespace,
-            parent_job_name=job_name,
+            parent=wrapping_parent,
         )
 
     # 9. Construct test events (only for test/build commands)
     # Consolidated pattern: single event with all test inputs
-    # No parent params - test events don't have parent relationship
+    # Test events share wrapping job identity, so parent is orchestrator
     test_events: list[Any] = []
     if config.emit_test_events:
         test_events = construct_test_events(
@@ -442,6 +516,7 @@ def execute_workflow(config: WorkflowConfig) -> int:  # noqa: PLR0912, PLR0915
             job_name=job_name,
             run_id=wrapping_run_id,
             namespace_override=config.dataset_namespace,
+            parent=orchestrator_parent,
         )
 
     # 10. Create terminal event (COMPLETE or FAIL)
@@ -453,6 +528,7 @@ def execute_workflow(config: WorkflowConfig) -> int:  # noqa: PLR0912, PLR0915
         job_name,
         config.job_namespace,
         terminal_timestamp,
+        parent=orchestrator_parent,
     )
 
     # 11. Batch emit all events: lineage + tests (if any) + terminal

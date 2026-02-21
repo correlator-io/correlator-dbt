@@ -55,7 +55,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - This caused model jobs to show "RUNNING" status with invalid completion timestamps
   - Required for correct job status display on incident detail page
   - Uses OpenLineage SDK classes (`ParentRunFacet`, `ParentRun`, `ParentJob`) for validation
-  - Note: Test events do NOT have ParentRunFacet (consolidated pattern avoids self-referential parent)
+  - Note: Test events get orchestrator parent (not wrapping parent) since they share wrapping job identity
+  - Add orchestrator parent context for wrapping and test events
+    - Reads `OPENLINEAGE_PARENT_ID` env var (format: `namespace/job_name/run_id`)
+    - Reads `OPENLINEAGE_ROOT_PARENT_ID` for DAG-level root tracking
+    - Falls back to parent as root when root env var is not set (matches dbt-ol behavior)
+    - Wrapping events (START/COMPLETE/FAIL) now include `ParentRunFacet` linking to orchestrator
+    - Test events now include `ParentRunFacet` linking to orchestrator (same job identity as wrapping)
+    - No-op when env vars are not set (standalone CLI behavior unchanged)
 
 - Fix incorrect PRODUCER URL in OpenLineage events
   - Changed from `https://github.com/correlator-io/dbt-correlator` to
