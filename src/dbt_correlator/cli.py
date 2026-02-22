@@ -494,6 +494,15 @@ def execute_workflow(config: WorkflowConfig) -> int:  # noqa: PLR0912, PLR0915
             run_id=wrapping_run_id,
             job_name=job_name,
             job_namespace=config.job_namespace,
+            root_run_id=(
+                orchestrator_parent.root_run_id if orchestrator_parent else None
+            ),
+            root_job_name=(
+                orchestrator_parent.root_job_name if orchestrator_parent else None
+            ),
+            root_job_namespace=(
+                orchestrator_parent.root_job_namespace if orchestrator_parent else None
+            ),
         )
         lineage_events = construct_lineage_events(
             model_lineages=model_lineages,
