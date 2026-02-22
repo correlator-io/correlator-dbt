@@ -1736,18 +1736,58 @@ class TestGetParentRunMetadata:
 
         assert result is None
 
-    def test_returns_none_on_too_many_parts(
+    def test_handles_airflow_default_namespace(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Test returns None when namespace contains '/' (URL-style)."""
+        """Test that airflow default namespace is parsed correctly."""
         monkeypatch.setenv(
             "OPENLINEAGE_PARENT_ID",
-            "http://airflow:8080/dag.task/some-uuid",
+            "default/demo_pipeline.dbt_run/019c8582-5c58-7c59-a16f-5bd41c03f6cd",
+        )
+        monkeypatch.delenv("OPENLINEAGE_ROOT_PARENT_ID", raising=False)
+
+        result = get_parent_run_metadata()
+
+        assert result is not None
+        assert result.job_namespace == "default"
+        assert result.job_name == "demo_pipeline.dbt_run"
+        assert result.run_id == "019c8582-5c58-7c59-a16f-5bd41c03f6cd"
+
+    def test_handles_url_style_namespace(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that URL-style namespaces (e.g., airflow://demo) are parsed correctly."""
+        monkeypatch.setenv(
+            "OPENLINEAGE_PARENT_ID",
+            "airflow://demo/demo_pipeline.dbt_run/019c8582-5c58-7c59-a16f-5bd41c03f6cd",
+        )
+        monkeypatch.delenv("OPENLINEAGE_ROOT_PARENT_ID", raising=False)
+
+        result = get_parent_run_metadata()
+
+        assert result is not None
+        assert result.job_namespace == "airflow://demo"
+        assert result.job_name == "demo_pipeline.dbt_run"
+        assert result.run_id == "019c8582-5c58-7c59-a16f-5bd41c03f6cd"
+
+    def test_handles_url_style_namespace_with_root(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test URL-style namespace parsing for both parent and root."""
+        monkeypatch.setenv(
+            "OPENLINEAGE_PARENT_ID",
+            "airflow://demo/demo_pipeline.dbt_run/019c8582-5c58-7c59-a16f-5bd41c03f6cd",
+        )
+        monkeypatch.setenv(
+            "OPENLINEAGE_ROOT_PARENT_ID",
+            "airflow://demo/demo_pipeline/019c8582-5c58-7c59-a16f-5bd41c03f6cd",
         )
 
         result = get_parent_run_metadata()
 
-        assert result is None
+        assert result is not None
+        assert result.job_namespace == "airflow://demo"
+        assert result.job_name == "demo_pipeline.dbt_run"
+        assert result.root_job_namespace == "airflow://demo"
+        assert result.root_job_name == "demo_pipeline"
 
     def test_reads_root_parent_id(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that OPENLINEAGE_ROOT_PARENT_ID is correctly parsed."""

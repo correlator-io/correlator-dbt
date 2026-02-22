@@ -299,8 +299,8 @@ def get_parent_run_metadata() -> Optional[ParentRunMetadata]:
     When OPENLINEAGE_ROOT_PARENT_ID is not set, parent values are reused as
     root.
 
-    Limitation: Namespaces containing "/" (e.g., URLs) will cause parsing to
-    fail gracefully. Airflow defaults to simple string namespaces (e.g., "default").
+    Uses rsplit("/", 2) to handle URL-style namespaces (e.g., "airflow://demo")
+    where the namespace itself contains slashes.
 
     Returns:
         ParentRunMetadata if OPENLINEAGE_PARENT_ID is set and valid, else None.
@@ -309,7 +309,7 @@ def get_parent_run_metadata() -> Optional[ParentRunMetadata]:
     if not parent_id:
         return None
 
-    parts = parent_id.split("/")
+    parts = parent_id.rsplit("/", 2)
     if len(parts) != 3:
         logger.warning(
             "OPENLINEAGE_PARENT_ID cannot be parsed "
@@ -324,7 +324,7 @@ def get_parent_run_metadata() -> Optional[ParentRunMetadata]:
     root_run_id = root_job_name = root_job_namespace = None
     root_parent_id = os.getenv("OPENLINEAGE_ROOT_PARENT_ID")
     if root_parent_id:
-        root_parts = root_parent_id.split("/")
+        root_parts = root_parent_id.rsplit("/", 2)
         if len(root_parts) == 3:
             root_job_namespace, root_job_name, root_run_id = root_parts
         else:
