@@ -1175,6 +1175,142 @@ class TestExtractModelInputs:
         assert "staging.stg_customers" in input_names
         assert "raw.external_data" in input_names
 
+    def test_extract_model_inputs_with_seed_dependency(self) -> None:
+        """Test extracting inputs from model with seed dependency.
+
+        Validates:
+            - Model depending on seed returns DatasetInfo for the seed
+            - Seeds are looked up in manifest.nodes (not sources)
+
+        This is a fix for Bug 4: seeds were previously skipped, causing
+        staging models to have empty inputs.
+        """
+        # Arrange: Create a model that depends on a seed
+        model_node = {
+            "database": "analytics",
+            "schema": "staging",
+            "name": "stg_customers",
+            "depends_on": {"nodes": ["seed.project.raw_customers"]},
+        }
+
+        # Create manifest with seed node (seeds are in manifest.nodes)
+        seed_node = {
+            "database": "analytics",
+            "schema": "raw",
+            "name": "raw_customers",
+        }
+
+        manifest = Manifest(
+            nodes={"seed.project.raw_customers": seed_node},
+            sources={},
+            metadata={"adapter_type": "postgres"},
+        )
+
+        # Act: Extract model inputs
+        inputs = extract_model_inputs(model_node, manifest)
+
+        # Assert: Should have one input from seed
+        assert len(inputs) == 1
+        assert inputs[0].namespace == "postgres://analytics"
+        assert inputs[0].name == "raw.raw_customers"
+
+    def test_extract_model_inputs_mixed_seed_model_source(self) -> None:
+        """Test extracting inputs from model with seed, model, and source dependencies.
+
+        Validates:
+            - Model with mixed dependencies (seed + model + source) returns all as DatasetInfo
+            - All three dependency types are correctly resolved
+        """
+        # Arrange: Create a model that depends on seed, model, and source
+        model_node = {
+            "database": "analytics",
+            "schema": "marts",
+            "name": "final_customers",
+            "depends_on": {
+                "nodes": [
+                    "seed.project.raw_customers",
+                    "model.project.stg_orders",
+                    "source.project.external.api_data",
+                ]
+            },
+        }
+
+        # Create manifest with seed, model, and source
+        seed_node = {
+            "database": "analytics",
+            "schema": "seeds",
+            "name": "raw_customers",
+        }
+        model_node_dep = {
+            "database": "analytics",
+            "schema": "staging",
+            "name": "stg_orders",
+        }
+        source_node = {
+            "database": "analytics",
+            "schema": "external",
+            "name": "api_data",
+            "identifier": "api_data",
+        }
+
+        manifest = Manifest(
+            nodes={
+                "seed.project.raw_customers": seed_node,
+                "model.project.stg_orders": model_node_dep,
+            },
+            sources={"source.project.external.api_data": source_node},
+            metadata={"adapter_type": "snowflake"},
+        )
+
+        # Act: Extract model inputs
+        inputs = extract_model_inputs(model_node, manifest)
+
+        # Assert: Should have three inputs (seed + model + source)
+        assert len(inputs) == 3
+        input_names = [inp.name for inp in inputs]
+        assert "seeds.raw_customers" in input_names
+        assert "staging.stg_orders" in input_names
+        assert "external.api_data" in input_names
+
+    def test_extract_model_inputs_seed_not_found_in_manifest(self) -> None:
+        """Test handling of seed dependency not found in manifest.
+
+        Validates:
+            - Missing seed logs warning but doesn't raise error
+            - Other dependencies still processed
+        """
+        # Arrange: Create model with seed dependency, but seed not in manifest
+        model_node = {
+            "database": "analytics",
+            "schema": "staging",
+            "name": "stg_customers",
+            "depends_on": {
+                "nodes": [
+                    "seed.project.missing_seed",
+                    "model.project.other_model",
+                ]
+            },
+        }
+
+        other_model_node = {
+            "database": "analytics",
+            "schema": "staging",
+            "name": "other_model",
+        }
+
+        manifest = Manifest(
+            nodes={"model.project.other_model": other_model_node},  # seed not included
+            sources={},
+            metadata={"adapter_type": "postgres"},
+        )
+
+        # Act: Extract model inputs (should not raise, just warn)
+        inputs = extract_model_inputs(model_node, manifest)
+
+        # Assert: Only the model dependency is returned (seed was not found)
+        assert len(inputs) == 1
+        assert inputs[0].name == "staging.other_model"
+
 
 # =============================================================================
 # Tests for get_models_with_tests()

@@ -581,9 +581,21 @@ def extract_model_inputs(
                 logger.warning(
                     "Dependency source not found in manifest: %s", dep_unique_id
                 )
+        # Handle seed dependencies (seeds are stored in manifest.nodes)
+        elif dep_unique_id.startswith("seed."):
+            seed_node = manifest.nodes.get(dep_unique_id)
+            if seed_node:
+                dataset_info = build_dataset_info(
+                    seed_node, manifest, namespace_override
+                )
+                inputs.append(dataset_info)
+            else:
+                logger.warning(
+                    "Dependency seed not found in manifest: %s", dep_unique_id
+                )
         else:
-            # Unknown dependency type (seed, snapshot, etc.)
-            logger.debug("Skipping non-model/source dependency: %s", dep_unique_id)
+            # Unknown dependency type (snapshot, etc.)
+            logger.debug("Skipping non-model/source/seed dependency: %s", dep_unique_id)
 
     return inputs
 
@@ -611,7 +623,7 @@ def extract_all_model_lineage(
         >>> m = parse_manifest("target/manifest.json")
         >>> lineages = extract_all_model_lineage(m)
         >>> len(lineages)  # One per model
-        13
+        10
         >>> lineages[0].unique_id
         'model.jaffle_shop.customers'
     """

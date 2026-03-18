@@ -25,7 +25,8 @@ from click.testing import CliRunner
 from openlineage.client.event_v2 import RunEvent
 
 from dbt_correlator import __version__
-from dbt_correlator.cli import cli, get_default_job_name
+from dbt_correlator.cli import cli, get_default_job_name, get_parent_run_metadata
+from dbt_correlator.emitter import ParentRunMetadata
 from dbt_correlator.parser import Manifest, RunResults, RunResultsMetadata, TestResult
 
 # =============================================================================
@@ -157,7 +158,6 @@ def cli_mocks(
         patch("dbt_correlator.cli.parse_run_results") as mock_parse_results,
         patch("dbt_correlator.cli.extract_all_model_lineage") as mock_extract_lineage,
         patch("dbt_correlator.cli.get_executed_models") as mock_get_executed,
-        patch("dbt_correlator.cli.get_models_with_tests") as mock_get_models_with_tests,
         patch("dbt_correlator.cli.extract_model_results") as mock_extract_model_results,
     ):
         # Set default return values
@@ -166,10 +166,10 @@ def cli_mocks(
         mock_parse_manifest.return_value = mock_manifest
         mock_wrapping.return_value = mock_run_event
         mock_construct.return_value = [mock_run_event]
+        # construct_lineage_events returns list of events
         mock_lineage_events.return_value = [mock_run_event]
         mock_extract_lineage.return_value = []  # Empty list of ModelLineage
         mock_get_executed.return_value = {"model.my_project.users"}
-        mock_get_models_with_tests.return_value = {"model.my_project.users"}
         mock_extract_model_results.return_value = {}
 
         yield {
@@ -182,7 +182,6 @@ def cli_mocks(
             "parse_results": mock_parse_results,
             "extract_lineage": mock_extract_lineage,
             "get_executed": mock_get_executed,
-            "get_models_with_tests": mock_get_models_with_tests,
             "extract_model_results": mock_extract_model_results,
             "run_results": mock_run_results,
             "manifest": mock_manifest,
@@ -459,13 +458,14 @@ class TestEmission:
 
         Test command emits:
         1. START event immediately (1 event)
-        2. lineage (1) + test events (2) + terminal (1) = 4 events in batch
+        2. test events (2) + terminal (1) = 3 events in batch
+           (no lineage events - tests validate inputs, don't produce outputs)
         """
         cli_mocks["construct"].return_value = [
             cli_mocks["run_event"],
             cli_mocks["run_event"],
         ]
-        cli_mocks["construct_lineage"].return_value = [cli_mocks["run_event"]]
+        # Note: construct_lineage is NOT called for test command
 
         runner.invoke(
             cli,
@@ -481,9 +481,9 @@ class TestEmission:
         # First call: START event only
         start_events = cli_mocks["emit"].call_args_list[0][0][0]
         assert len(start_events) == 1
-        # Second call: lineage (1) + test events (2) + terminal (1) = 4 events
+        # Second call: test events (2) + terminal (1) = 3 events (no lineage)
         batch_events = cli_mocks["emit"].call_args_list[1][0][0]
-        assert len(batch_events) == 4
+        assert len(batch_events) == 3
 
 
 # =============================================================================
@@ -1133,10 +1133,14 @@ class TestBuildCommand:
         cli_mocks["construct_lineage"].assert_called_once()
         cli_mocks["construct"].assert_called_once()
 
-    def test_build_command_uses_single_run_id(
+    def test_build_command_test_events_use_consolidated_pattern(
         self, runner: CliRunner, cli_mocks: dict[str, Any]
     ) -> None:
-        """Test that build command uses same run_id for all events."""
+        """Test that build command uses consolidated pattern for test events.
+
+        Consolidated pattern: test events no longer receive model_run_ids.
+        Instead, a single event with all test inputs is created.
+        """
         runner.invoke(
             cli,
             [
@@ -1146,15 +1150,18 @@ class TestBuildCommand:
             ],
         )
 
-        # Get run_id from construct_lineage_events call
-        lineage_call_kwargs = cli_mocks["construct_lineage"].call_args[1]
-        lineage_run_id = lineage_call_kwargs.get("run_id")
-
-        # Get run_id from construct_test_events call
+        # Verify construct_test_events was called without model_run_ids
         construct_call_kwargs = cli_mocks["construct"].call_args[1]
-        construct_run_id = construct_call_kwargs.get("run_id")
 
-        assert lineage_run_id == construct_run_id, "All events should share same run_id"
+        # model_run_ids should NOT be passed (consolidated pattern)
+        assert (
+            "model_run_ids" not in construct_call_kwargs
+        ), "construct_test_events should NOT receive model_run_ids (consolidated pattern)"
+
+        # parent params should NOT be passed (fixes self-referential parent bug)
+        assert (
+            "parent_run_id" not in construct_call_kwargs
+        ), "construct_test_events should NOT receive parent_run_id (consolidated pattern)"
 
     def test_build_command_propagates_exit_code(
         self, runner: CliRunner, cli_mocks: dict[str, Any]
@@ -1571,22 +1578,23 @@ class TestStartEmissionTiming:
 
 
 # =============================================================================
-# O. Test Command Static Lineage Emission Tests
+# O. Test Command Does NOT Emit Lineage (Only Test Events)
 # =============================================================================
 
 
 @pytest.mark.unit
-class TestTestCommandLineageEmission:
-    """Tests for static lineage emission in test command.
+class TestTestCommandNoLineageEmission:
+    """Tests verifying test command does NOT emit lineage events.
 
-    The test command emits static lineage for models that have executed tests.
-    This enables correlation between test failures and model lineage.
+    Tests validate existing data (inputs only) - they don't produce outputs.
+    Emitting lineage events with outputs for test command creates spurious
+    edges in Correlator's lineage_impact_analysis view.
     """
 
-    def test_test_command_calls_get_models_with_tests(
+    def test_test_command_does_not_call_extract_lineage(
         self, runner: CliRunner, cli_mocks: dict[str, Any]
     ) -> None:
-        """Test that test command calls get_models_with_tests to filter models."""
+        """Test that test command does NOT extract model lineage."""
         runner.invoke(
             cli,
             [
@@ -1596,22 +1604,32 @@ class TestTestCommandLineageEmission:
             ],
         )
 
-        # Verify get_models_with_tests was called
-        cli_mocks["get_models_with_tests"].assert_called_once()
+        # extract_all_model_lineage should NOT be called for test command
+        cli_mocks["extract_lineage"].assert_not_called()
 
-    def test_test_command_passes_model_filter_to_extract_lineage(
+    def test_test_command_does_not_call_construct_lineage_events(
         self, runner: CliRunner, cli_mocks: dict[str, Any]
     ) -> None:
-        """Test that test command passes model filter to extract_all_model_lineage.
+        """Test that test command does NOT construct lineage events."""
+        runner.invoke(
+            cli,
+            [
+                "test",
+                "--correlator-endpoint",
+                "http://localhost:8080/api/v1/lineage/events",
+            ],
+        )
 
-        Only models with executed tests should have lineage extracted.
-        This is important when using --select to run specific tests.
+        # construct_lineage_events should NOT be called for test command
+        cli_mocks["construct_lineage"].assert_not_called()
+
+    def test_test_command_does_not_call_get_executed_models(
+        self, runner: CliRunner, cli_mocks: dict[str, Any]
+    ) -> None:
+        """Test that test command does NOT call get_executed_models.
+
+        get_executed_models is only used for lineage extraction in run/build.
         """
-        cli_mocks["get_models_with_tests"].return_value = {
-            "model.my_project.users",
-            "model.my_project.orders",
-        }
-
         runner.invoke(
             cli,
             [
@@ -1621,21 +1639,17 @@ class TestTestCommandLineageEmission:
             ],
         )
 
-        # Verify extract_all_model_lineage received the model filter
-        call_kwargs = cli_mocks["extract_lineage"].call_args[1]
-        model_ids = call_kwargs.get("model_ids")
-        assert model_ids == {"model.my_project.users", "model.my_project.orders"}
+        # get_executed_models should NOT be called for test command
+        cli_mocks["get_executed"].assert_not_called()
 
-    def test_test_command_emits_lineage_events_for_tested_models(
+    def test_test_command_only_emits_test_events_plus_terminal(
         self, runner: CliRunner, cli_mocks: dict[str, Any]
     ) -> None:
-        """Test that test command includes lineage events in batch emission."""
-        # Set up lineage events to be returned
-        cli_mocks["construct_lineage"].return_value = [
+        """Test that test command emits only test events + terminal, no lineage."""
+        cli_mocks["construct"].return_value = [
             cli_mocks["run_event"],
             cli_mocks["run_event"],
         ]
-        cli_mocks["construct"].return_value = [cli_mocks["run_event"]]
 
         runner.invoke(
             cli,
@@ -1646,15 +1660,15 @@ class TestTestCommandLineageEmission:
             ],
         )
 
-        # Second emit call should include lineage events
+        # Second emit call should have test events + terminal only
         batch_events = cli_mocks["emit"].call_args_list[1][0][0]
-        # 2 lineage + 1 test + 1 terminal = 4 events
-        assert len(batch_events) == 4
+        # 2 test events + 1 terminal = 3 events (no lineage!)
+        assert len(batch_events) == 3
 
-    def test_test_command_uses_dataset_namespace_for_lineage(
+    def test_test_command_dataset_namespace_passed_to_test_events(
         self, runner: CliRunner, cli_mocks: dict[str, Any]
     ) -> None:
-        """Test that --dataset-namespace is passed to extract_all_model_lineage."""
+        """Test that --dataset-namespace is passed to construct_test_events."""
         runner.invoke(
             cli,
             [
@@ -1666,23 +1680,208 @@ class TestTestCommandLineageEmission:
             ],
         )
 
-        # Verify namespace_override was passed
-        call_kwargs = cli_mocks["extract_lineage"].call_args[1]
+        # Verify namespace_override was passed to construct_test_events
+        call_kwargs = cli_mocks["construct"].call_args[1]
         assert (
             call_kwargs.get("namespace_override")
             == "postgresql://mydb.example.com:5432/analytics"
         )
 
-    def test_test_command_no_lineage_for_empty_model_filter(
-        self, runner: CliRunner, cli_mocks: dict[str, Any]
-    ) -> None:
-        """Test that empty model filter results in no lineage extraction.
 
-        This can happen if no tests matched the --select filter.
+# =============================================================================
+# Tests for get_parent_run_metadata()
+# =============================================================================
+
+
+@pytest.mark.unit
+class TestGetParentRunMetadata:
+    """Tests for reading orchestrator parent context from environment variables.
+
+    Validates parsing of OPENLINEAGE_PARENT_ID and OPENLINEAGE_ROOT_PARENT_ID
+    environment variables set by Airflow's Jinja macros.
+    """
+
+    def test_reads_parent_id_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that OPENLINEAGE_PARENT_ID is correctly parsed."""
+        monkeypatch.setenv(
+            "OPENLINEAGE_PARENT_ID",
+            "airflow/demo_pipeline.dbt_test/019c7c79-b160-7c2f-8ad4-a026c5a82b5a",
+        )
+        # Ensure root is not set (test parent-only behavior with fallback)
+        monkeypatch.delenv("OPENLINEAGE_ROOT_PARENT_ID", raising=False)
+
+        result = get_parent_run_metadata()
+
+        assert result is not None
+        assert result.job_namespace == "airflow"
+        assert result.job_name == "demo_pipeline.dbt_test"
+        assert result.run_id == "019c7c79-b160-7c2f-8ad4-a026c5a82b5a"
+
+    def test_returns_none_when_not_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test returns None when not orchestrated (standalone CLI)."""
+        monkeypatch.delenv("OPENLINEAGE_PARENT_ID", raising=False)
+        monkeypatch.delenv("OPENLINEAGE_ROOT_PARENT_ID", raising=False)
+
+        result = get_parent_run_metadata()
+
+        assert result is None
+
+    def test_returns_none_on_malformed_input(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test returns None and warns on malformed OPENLINEAGE_PARENT_ID."""
+        monkeypatch.setenv("OPENLINEAGE_PARENT_ID", "invalid-format")
+
+        result = get_parent_run_metadata()
+
+        assert result is None
+
+    def test_handles_airflow_default_namespace(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test that airflow default namespace is parsed correctly."""
+        monkeypatch.setenv(
+            "OPENLINEAGE_PARENT_ID",
+            "default/demo_pipeline.dbt_run/019c8582-5c58-7c59-a16f-5bd41c03f6cd",
+        )
+        monkeypatch.delenv("OPENLINEAGE_ROOT_PARENT_ID", raising=False)
+
+        result = get_parent_run_metadata()
+
+        assert result is not None
+        assert result.job_namespace == "default"
+        assert result.job_name == "demo_pipeline.dbt_run"
+        assert result.run_id == "019c8582-5c58-7c59-a16f-5bd41c03f6cd"
+
+    def test_handles_url_style_namespace(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that URL-style namespaces (e.g., airflow://demo) are parsed correctly."""
+        monkeypatch.setenv(
+            "OPENLINEAGE_PARENT_ID",
+            "airflow://demo/demo_pipeline.dbt_run/019c8582-5c58-7c59-a16f-5bd41c03f6cd",
+        )
+        monkeypatch.delenv("OPENLINEAGE_ROOT_PARENT_ID", raising=False)
+
+        result = get_parent_run_metadata()
+
+        assert result is not None
+        assert result.job_namespace == "airflow://demo"
+        assert result.job_name == "demo_pipeline.dbt_run"
+        assert result.run_id == "019c8582-5c58-7c59-a16f-5bd41c03f6cd"
+
+    def test_handles_url_style_namespace_with_root(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test URL-style namespace parsing for both parent and root."""
+        monkeypatch.setenv(
+            "OPENLINEAGE_PARENT_ID",
+            "airflow://demo/demo_pipeline.dbt_run/019c8582-5c58-7c59-a16f-5bd41c03f6cd",
+        )
+        monkeypatch.setenv(
+            "OPENLINEAGE_ROOT_PARENT_ID",
+            "airflow://demo/demo_pipeline/019c8582-5c58-7c59-a16f-5bd41c03f6cd",
+        )
+
+        result = get_parent_run_metadata()
+
+        assert result is not None
+        assert result.job_namespace == "airflow://demo"
+        assert result.job_name == "demo_pipeline.dbt_run"
+        assert result.root_job_namespace == "airflow://demo"
+        assert result.root_job_name == "demo_pipeline"
+
+    def test_reads_root_parent_id(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that OPENLINEAGE_ROOT_PARENT_ID is correctly parsed."""
+        monkeypatch.setenv(
+            "OPENLINEAGE_PARENT_ID",
+            "airflow/demo_pipeline.dbt_test/019c7c79-b160-7c2f-8ad4-a026c5a82b5a",
+        )
+        monkeypatch.setenv(
+            "OPENLINEAGE_ROOT_PARENT_ID",
+            "airflow/demo_pipeline/019c7c79-aaaa-bbbb-cccc-111122223333",
+        )
+
+        result = get_parent_run_metadata()
+
+        assert result is not None
+        assert result.root_run_id == "019c7c79-aaaa-bbbb-cccc-111122223333"
+        assert result.root_job_namespace == "airflow"
+        assert result.root_job_name == "demo_pipeline"
+
+    def test_root_falls_back_to_parent_when_not_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test that root defaults to parent values when ROOT env var is unset.
+
+        This matches dbt-ol behavior: when OPENLINEAGE_ROOT_PARENT_ID is not
+        set, the parent values are reused as root.
         """
-        cli_mocks["get_models_with_tests"].return_value = set()  # No models with tests
-        cli_mocks["extract_lineage"].return_value = []  # No lineage
-        cli_mocks["construct_lineage"].return_value = []  # No lineage events
+        monkeypatch.setenv(
+            "OPENLINEAGE_PARENT_ID",
+            "airflow/demo_pipeline.dbt_test/019c7c79-b160-7c2f-8ad4-a026c5a82b5a",
+        )
+        monkeypatch.delenv("OPENLINEAGE_ROOT_PARENT_ID", raising=False)
+
+        result = get_parent_run_metadata()
+
+        assert result is not None
+        # Root should fall back to parent values
+        assert result.root_run_id == "019c7c79-b160-7c2f-8ad4-a026c5a82b5a"
+        assert result.root_job_namespace == "airflow"
+        assert result.root_job_name == "demo_pipeline.dbt_test"
+
+    def test_root_none_on_malformed_root(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that malformed ROOT env var results in None root fields."""
+        monkeypatch.setenv(
+            "OPENLINEAGE_PARENT_ID",
+            "airflow/demo_pipeline.dbt_test/019c7c79-b160-7c2f-8ad4-a026c5a82b5a",
+        )
+        monkeypatch.setenv("OPENLINEAGE_ROOT_PARENT_ID", "malformed-value")
+
+        result = get_parent_run_metadata()
+
+        assert result is not None
+        # Parent should still be parsed
+        assert result.job_namespace == "airflow"
+        # Root should be None due to malformed input
+        assert result.root_run_id is None
+        assert result.root_job_namespace is None
+        assert result.root_job_name is None
+
+    def test_returns_none_on_empty_string(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test returns None when OPENLINEAGE_PARENT_ID is empty string."""
+        monkeypatch.setenv("OPENLINEAGE_PARENT_ID", "")
+
+        result = get_parent_run_metadata()
+
+        assert result is None
+
+
+# =============================================================================
+# Tests for execute_workflow() orchestrator parent integration
+# =============================================================================
+
+
+@pytest.mark.unit
+class TestWorkflowOrchestratorParent:
+    """Tests for orchestrator parent context in execute_workflow().
+
+    Validates that OPENLINEAGE_PARENT_ID is read and passed to wrapping events.
+    """
+
+    def test_workflow_passes_orchestrator_parent_to_wrapping_events(
+        self,
+        runner: CliRunner,
+        cli_mocks: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Test that wrapping events include parent when env var is set."""
+        monkeypatch.setenv(
+            "OPENLINEAGE_PARENT_ID",
+            "airflow/demo_pipeline.dbt_test/019c7c79-b160-7c2f-8ad4-a026c5a82b5a",
+        )
+        monkeypatch.delenv("OPENLINEAGE_ROOT_PARENT_ID", raising=False)
 
         runner.invoke(
             cli,
@@ -1693,7 +1892,77 @@ class TestTestCommandLineageEmission:
             ],
         )
 
-        # extract_lineage should still be called (with empty filter)
-        cli_mocks["extract_lineage"].assert_called_once()
-        call_kwargs = cli_mocks["extract_lineage"].call_args[1]
-        assert call_kwargs.get("model_ids") == set()
+        # Both START and terminal wrapping events should have parent
+        assert cli_mocks["wrapping"].call_count == 2
+
+        for call in cli_mocks["wrapping"].call_args_list:
+            kwargs = call[1] if call[1] else {}
+            parent = kwargs.get("parent")
+            assert parent is not None
+            assert isinstance(parent, ParentRunMetadata)
+            assert parent.run_id == "019c7c79-b160-7c2f-8ad4-a026c5a82b5a"
+            assert parent.job_namespace == "airflow"
+            assert parent.job_name == "demo_pipeline.dbt_test"
+            # Root falls back to parent when ROOT env var not set
+            assert parent.root_run_id == "019c7c79-b160-7c2f-8ad4-a026c5a82b5a"
+            assert parent.root_job_namespace == "airflow"
+            assert parent.root_job_name == "demo_pipeline.dbt_test"
+
+    def test_workflow_passes_separate_root_parent(
+        self,
+        runner: CliRunner,
+        cli_mocks: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Test that separate root parent is passed when both env vars are set."""
+        monkeypatch.setenv(
+            "OPENLINEAGE_PARENT_ID",
+            "airflow/demo_pipeline.dbt_test/019c7c79-b160-7c2f-8ad4-a026c5a82b5a",
+        )
+        monkeypatch.setenv(
+            "OPENLINEAGE_ROOT_PARENT_ID",
+            "airflow/demo_pipeline/019c7c79-aaaa-bbbb-cccc-111122223333",
+        )
+
+        runner.invoke(
+            cli,
+            [
+                "test",
+                "--correlator-endpoint",
+                "http://localhost:8080/api/v1/lineage/events",
+            ],
+        )
+
+        for call in cli_mocks["wrapping"].call_args_list:
+            kwargs = call[1] if call[1] else {}
+            parent = kwargs.get("parent")
+            assert parent is not None
+            # Parent should be the task
+            assert parent.run_id == "019c7c79-b160-7c2f-8ad4-a026c5a82b5a"
+            assert parent.job_name == "demo_pipeline.dbt_test"
+            # Root should be the DAG
+            assert parent.root_run_id == "019c7c79-aaaa-bbbb-cccc-111122223333"
+            assert parent.root_job_name == "demo_pipeline"
+
+    def test_workflow_no_parent_when_env_not_set(
+        self,
+        runner: CliRunner,
+        cli_mocks: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Test that wrapping events have no parent when standalone."""
+        monkeypatch.delenv("OPENLINEAGE_PARENT_ID", raising=False)
+        monkeypatch.delenv("OPENLINEAGE_ROOT_PARENT_ID", raising=False)
+
+        runner.invoke(
+            cli,
+            [
+                "test",
+                "--correlator-endpoint",
+                "http://localhost:8080/api/v1/lineage/events",
+            ],
+        )
+
+        for call in cli_mocks["wrapping"].call_args_list:
+            kwargs = call[1] if call[1] else {}
+            assert kwargs.get("parent") is None

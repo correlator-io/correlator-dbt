@@ -19,16 +19,17 @@ The CLI follows Click conventions and integrates with the correlator ecosystem
 using the same patterns as other correlator plugins.
 """
 
+import logging
 import os
 import subprocess
 import sys
-import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, Optional
 
 import click
+from uuid6 import uuid7
 
 from . import __version__
 from .config import (
@@ -40,6 +41,7 @@ from .config import (
 )
 from .emitter import (
     PRODUCER,
+    ParentRunMetadata,
     construct_lineage_events,
     construct_test_events,
     create_wrapping_event,
@@ -49,10 +51,11 @@ from .parser import (
     extract_all_model_lineage,
     extract_model_results,
     get_executed_models,
-    get_models_with_tests,
     parse_manifest,
     parse_run_results,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -101,6 +104,7 @@ class WorkflowConfig:
 
     # Workflow-specific flags derived from command type
     emit_test_events: bool = False
+    emit_lineage_events: bool = False
     include_runtime_metrics: bool = False
 
     @classmethod
@@ -118,8 +122,8 @@ class WorkflowConfig:
     ) -> "WorkflowConfig":
         """Create configuration for dbt test workflow.
 
-        Test workflow: emits test events, no runtime metrics.
-        Uses get_models_with_tests() to filter models.
+        Test workflow: emits test events only, no lineage events or runtime metrics.
+        Tests validate existing data - they don't produce outputs.
         """
         return cls(
             command="test",
@@ -133,6 +137,7 @@ class WorkflowConfig:
             skip_dbt_run=skip_dbt_run,
             dbt_args=dbt_args,
             emit_test_events=True,
+            emit_lineage_events=False,
             include_runtime_metrics=False,
         )
 
@@ -151,7 +156,7 @@ class WorkflowConfig:
     ) -> "WorkflowConfig":
         """Create configuration for dbt run workflow.
 
-        Run workflow: emits runtime metrics, no test events.
+        Run workflow: emits lineage events with runtime metrics, no test events.
         Uses get_executed_models() to filter models.
         """
         return cls(
@@ -166,6 +171,7 @@ class WorkflowConfig:
             skip_dbt_run=skip_dbt_run,
             dbt_args=dbt_args,
             emit_test_events=False,
+            emit_lineage_events=True,
             include_runtime_metrics=True,
         )
 
@@ -184,7 +190,7 @@ class WorkflowConfig:
     ) -> "WorkflowConfig":
         """Create configuration for dbt build workflow.
 
-        Build workflow: emits both test events AND runtime metrics.
+        Build workflow: emits both lineage events AND test events with runtime metrics.
         Uses get_executed_models() to filter models.
         Single runId shared across all events for better correlation.
         """
@@ -200,6 +206,7 @@ class WorkflowConfig:
             skip_dbt_run=skip_dbt_run,
             dbt_args=dbt_args,
             emit_test_events=True,
+            emit_lineage_events=True,
             include_runtime_metrics=True,
         )
 
@@ -282,6 +289,65 @@ def get_api_key_with_fallback() -> Optional[str]:
     return os.environ.get("CORRELATOR_API_KEY") or os.environ.get("OPENLINEAGE_API_KEY")
 
 
+def get_parent_run_metadata() -> Optional[ParentRunMetadata]:
+    """Read parent run context from OPENLINEAGE_PARENT_ID environment variable.
+
+    Format: "{namespace}/{job_name}/{run_id}" — the same format produced by
+    Airflow's lineage_parent_id() macro. Also reads OPENLINEAGE_ROOT_PARENT_ID
+    for DAG-level root tracking.
+
+    When OPENLINEAGE_ROOT_PARENT_ID is not set, parent values are reused as
+    root.
+
+    Uses rsplit("/", 2) to handle URL-style namespaces (e.g., "airflow://demo")
+    where the namespace itself contains slashes.
+
+    Returns:
+        ParentRunMetadata if OPENLINEAGE_PARENT_ID is set and valid, else None.
+    """
+    parent_id = os.getenv("OPENLINEAGE_PARENT_ID")
+    if not parent_id:
+        return None
+
+    parts = parent_id.rsplit("/", 2)
+    if len(parts) != 3:
+        logger.warning(
+            "OPENLINEAGE_PARENT_ID cannot be parsed "
+            "(expected 'namespace/job_name/run_id'): %s",
+            parent_id,
+        )
+        return None
+
+    namespace, job_name, run_id = parts
+
+    # Parse optional root parent (Airflow DAG-level)
+    root_run_id = root_job_name = root_job_namespace = None
+    root_parent_id = os.getenv("OPENLINEAGE_ROOT_PARENT_ID")
+    if root_parent_id:
+        root_parts = root_parent_id.rsplit("/", 2)
+        if len(root_parts) == 3:
+            root_job_namespace, root_job_name, root_run_id = root_parts
+        else:
+            logger.warning(
+                "OPENLINEAGE_ROOT_PARENT_ID cannot be parsed: %s",
+                root_parent_id,
+            )
+    else:
+        # dbt-ol fallback: when root not set, parent becomes root
+        root_run_id = run_id
+        root_job_name = job_name
+        root_job_namespace = namespace
+
+    return ParentRunMetadata(
+        run_id=run_id,
+        job_name=job_name,
+        job_namespace=namespace,
+        root_run_id=root_run_id,
+        root_job_name=root_job_name,
+        root_job_namespace=root_job_namespace,
+    )
+
+
 def resolve_credentials(
     endpoint: Optional[str],
     api_key: Optional[str],
@@ -329,13 +395,12 @@ def execute_workflow(config: WorkflowConfig) -> int:  # noqa: PLR0912, PLR0915
     2. Emits START wrapping event immediately
     3. Runs dbt command (unless skip_dbt_run)
     4. Parses dbt artifacts
-    5. Extracts model lineage (filtered by command type)
-    6. Optionally extracts runtime metrics (run/build only)
-    7. Constructs lineage events
-    8. Optionally constructs test events (test/build only)
-    9. Creates terminal event (COMPLETE/FAIL)
-    10. Batch emits all events to OpenLineage backend
-    11. Returns dbt exit code
+    5-8. Optionally constructs lineage events (run/build only)
+         - Test command skips lineage: tests validate inputs, don't produce outputs
+    9. Optionally constructs test events (test/build only)
+    10. Creates terminal event (COMPLETE/FAIL)
+    11. Batch emits all events to OpenLineage backend
+    12. Returns dbt exit code
 
     Args:
         config: WorkflowConfig with all workflow parameters.
@@ -349,9 +414,12 @@ def execute_workflow(config: WorkflowConfig) -> int:  # noqa: PLR0912, PLR0915
         Emission failures are logged as warnings but don't affect the exit code.
         This ensures lineage is "fire-and-forget" - dbt execution is primary.
     """
-    run_id = str(uuid.uuid4())
+    wrapping_run_id = str(uuid7())
     dbt_exit_code = 0
     manifest = None  # Will be parsed once and reused
+
+    # 0. Read orchestrator parent context (Airflow, etc.)
+    orchestrator_parent = get_parent_run_metadata()
 
     # 1. Resolve job name (parse manifest if needed)
     job_name = config.job_name
@@ -365,7 +433,12 @@ def execute_workflow(config: WorkflowConfig) -> int:  # noqa: PLR0912, PLR0915
     # 2. Create and emit START event immediately
     start_timestamp = datetime.now(timezone.utc)
     start_event = create_wrapping_event(
-        "START", run_id, job_name, config.job_namespace, start_timestamp
+        "START",
+        wrapping_run_id,
+        job_name,
+        config.job_namespace,
+        start_timestamp,
+        parent=orchestrator_parent,
     )
     try:
         emit_events([start_event], config.endpoint, config.api_key)
@@ -395,38 +468,54 @@ def execute_workflow(config: WorkflowConfig) -> int:  # noqa: PLR0912, PLR0915
         click.echo(f"Error: {e}", err=True)
         return 1
 
-    # 5. Determine which models to emit lineage for
-    # test command: only models that have tests executed
-    # run/build commands: only models that were executed
-    if config.command == "test":
-        model_ids = get_models_with_tests(run_results, manifest)
-    else:
+    # 5-8. Construct lineage events (only for run/build commands)
+    # Test command only emits test events - tests validate inputs, don't produce outputs
+    lineage_events: list[Any] = []
+    model_ids: set[str] = set()
+    if config.emit_lineage_events:
+        # Determine which models to emit lineage for
         model_ids = get_executed_models(run_results)
 
-    # 6. Extract model lineage for filtered models
-    model_lineages = extract_all_model_lineage(
-        manifest,
-        model_ids=model_ids,
-        namespace_override=config.dataset_namespace,
-    )
+        # Extract model lineage for executed models
+        model_lineages = extract_all_model_lineage(
+            manifest,
+            model_ids=model_ids,
+            namespace_override=config.dataset_namespace,
+        )
 
-    # 7. Extract runtime metrics (only for run/build commands)
-    execution_results = None
-    if config.include_runtime_metrics:
-        execution_results = extract_model_results(run_results)
+        # Extract runtime metrics (only for run/build commands)
+        execution_results = None
+        if config.include_runtime_metrics:
+            execution_results = extract_model_results(run_results)
 
-    # 8. Construct lineage events
-    event_time = datetime.now(timezone.utc).isoformat()
-    lineage_events = construct_lineage_events(
-        model_lineages=model_lineages,
-        run_id=run_id,
-        job_namespace=config.job_namespace,
-        producer=PRODUCER,
-        event_time=event_time,
-        execution_results=execution_results,
-    )
+        # Construct lineage events (each model gets unique runId)
+        event_time = datetime.now(timezone.utc).isoformat()
+        wrapping_parent = ParentRunMetadata(
+            run_id=wrapping_run_id,
+            job_name=job_name,
+            job_namespace=config.job_namespace,
+            root_run_id=(
+                orchestrator_parent.root_run_id if orchestrator_parent else None
+            ),
+            root_job_name=(
+                orchestrator_parent.root_job_name if orchestrator_parent else None
+            ),
+            root_job_namespace=(
+                orchestrator_parent.root_job_namespace if orchestrator_parent else None
+            ),
+        )
+        lineage_events = construct_lineage_events(
+            model_lineages=model_lineages,
+            job_namespace=config.job_namespace,
+            producer=PRODUCER,
+            event_time=event_time,
+            execution_results=execution_results,
+            parent=wrapping_parent,
+        )
 
     # 9. Construct test events (only for test/build commands)
+    # Consolidated pattern: single event with all test inputs
+    # Test events share wrapping job identity, so parent is orchestrator
     test_events: list[Any] = []
     if config.emit_test_events:
         test_events = construct_test_events(
@@ -434,14 +523,21 @@ def execute_workflow(config: WorkflowConfig) -> int:  # noqa: PLR0912, PLR0915
             manifest=manifest,
             job_namespace=config.job_namespace,
             job_name=job_name,
-            run_id=run_id,
+            run_id=wrapping_run_id,
+            namespace_override=config.dataset_namespace,
+            parent=orchestrator_parent,
         )
 
     # 10. Create terminal event (COMPLETE or FAIL)
     terminal_timestamp = datetime.now(timezone.utc)
     terminal_type = "COMPLETE" if dbt_exit_code == 0 else "FAIL"
     terminal_event = create_wrapping_event(
-        terminal_type, run_id, job_name, config.job_namespace, terminal_timestamp
+        terminal_type,
+        wrapping_run_id,
+        job_name,
+        config.job_namespace,
+        terminal_timestamp,
+        parent=orchestrator_parent,
     )
 
     # 11. Batch emit all events: lineage + tests (if any) + terminal
@@ -450,11 +546,17 @@ def execute_workflow(config: WorkflowConfig) -> int:  # noqa: PLR0912, PLR0915
     try:
         emit_events(all_events, config.endpoint, config.api_key)
         # Build success message based on what was emitted
-        parts = [f"{len(lineage_events)} lineage events"]
+        parts = []
+        if lineage_events:
+            parts.append(f"{len(lineage_events)} lineage events")
         if test_events:
             parts.append(f"{len(test_events)} test events")
         parts.append("terminal event")
-        click.echo(f"Emitted {' + '.join(parts)} ({len(model_ids)} models)")
+        # Include model count for lineage, or just event summary for test-only
+        if model_ids:
+            click.echo(f"Emitted {' + '.join(parts)} ({len(model_ids)} models)")
+        else:
+            click.echo(f"Emitted {' + '.join(parts)}")
     except (ConnectionError, TimeoutError, ValueError) as e:
         click.echo(f"Warning: Failed to emit events: {e}", err=True)
         # Don't fail - lineage is fire-and-forget

@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-02-09
+
+### Fixed
+- **Critical:** Fix self-referential loops in downstream impact analysis
+  - Each model lineage event now gets a unique `runId` instead of sharing one
+  - Previously, Correlator aggregated all events by `runId`, creating loops when the
+    same dataset appeared as both input (dependency) and output (producer)
+  - Now uses UUID7 (time-ordered) per OpenLineage spec recommendation
+
+- **Critical:** Fix self-referential parent bug in test events (consolidated pattern)
+  - Test events now use a single consolidated `RUNNING` event with multiple inputs
+  - Each input dataset has its own `dataQualityAssertions` facet
+  - Test events no longer include `ParentRunFacet` (was causing self-referential parent)
+  - Extended assertion fields (`durationMs`, `message`) added for richer test metadata
+  - Job name no longer suffixed with dataset name (simpler job hierarchy)
+
+- **Critical:** Add seed support for complete lineage chains
+  - Seeds (e.g., `seed.jaffle_shop.raw_customers`) are now included as inputs
+  - Previously, seeds were skipped in `extract_model_inputs()`, causing staging
+    models to have empty inputs and breaking the lineage chain
+  - Seeds are looked up in `manifest.nodes` (same as models)
+
+- **Critical:** Fix state transition error when dbt tests fail
+  - Test and lineage events now use `RUNNING` state instead of `COMPLETE`
+  - `COMPLETE` and `FAIL` are terminal states reserved for wrapping events
+  - Previously, Correlator rejected events with "terminal state is immutable: COMPLETE → FAIL"
+  - This prevented test results from being stored when any dbt test failed
+  - See OpenLineage Run Cycle spec: https://openlineage.io/docs/spec/run-cycle
+
+- **Critical:** Fix missing dataQualityAssertions for multiple datasets
+  - Test events now use unique job names per dataset (`{job_name}.{dataset_name}`)
+  - Previously, all test events shared the same job name, causing idempotency key collision
+  - Correlator treated subsequent events as duplicates and only stored the first one
+  - Added `namespace_override` parameter to `construct_test_events()` for consistency with lineage events
+
+- **Critical:** Fix test command emitting spurious lineage events with outputs
+  - `dbt test` command now only emits test events (dataQualityAssertions)
+  - Previously, test command also emitted lineage events with populated `outputs` array
+  - This caused self-referential loops in Correlator's `lineage_impact_analysis` view
+  - Tests validate existing data (inputs only) - they don't produce outputs
+  - Added `emit_lineage_events` flag to `WorkflowConfig` for command-specific control
+
+- **Critical:** Add ParentRunFacet for parent-child job correlation
+  - Lineage events now include `run.facets.parent` referencing the wrapping job
+  - Previously, Correlator couldn't link child events (unique `runId`) to wrapping events
+  - This caused model jobs to show "RUNNING" status with invalid completion timestamps
+  - Required for correct job status display on incident detail page
+  - Uses OpenLineage SDK classes (`ParentRunFacet`, `ParentRun`, `ParentJob`) for validation
+  - Note: Test events get orchestrator parent (not wrapping parent) since they share wrapping job identity
+  - Add orchestrator parent context for wrapping and test events
+    - Reads `OPENLINEAGE_PARENT_ID` env var (format: `namespace/job_name/run_id`)
+    - Reads `OPENLINEAGE_ROOT_PARENT_ID` for DAG-level root tracking
+    - Falls back to parent as root when root env var is not set (matches dbt-ol behavior)
+    - Wrapping events (START/COMPLETE/FAIL) now include `ParentRunFacet` linking to orchestrator
+    - Test events now include `ParentRunFacet` linking to orchestrator (same job identity as wrapping)
+    - No-op when env vars are not set (standalone CLI behavior unchanged)
+
+- Fix incorrect PRODUCER URL in OpenLineage events
+  - Changed from `https://github.com/correlator-io/dbt-correlator` to
+    `https://github.com/correlator-io/correlator-dbt` (correct repository name)
+
 ## [0.1.0] - 2026-01-06
 
 First functional release of dbt-correlator. This release provides complete
@@ -67,6 +128,7 @@ for automated incident correlation.
 This was a skeleton release for pipeline testing and PyPI name reservation.
 All functionality returned placeholder messages.
 
-[Unreleased]: https://github.com/correlator-io/correlator-dbt/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/correlator-io/correlator-dbt/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/correlator-io/correlator-dbt/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/correlator-io/correlator-dbt/compare/v0.0.1...v0.1.0
 [0.0.1]: https://github.com/correlator-io/correlator-dbt/releases/tag/v0.0.1

@@ -16,6 +16,7 @@ Test Coverage:
 import json
 import uuid
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -25,6 +26,9 @@ import requests
 from openlineage.client.event_v2 import RunState
 
 from dbt_correlator.emitter import (
+    ParentRunMetadata,
+    _build_parent_facet,
+    _serialize_event_with_extended_fields,
     construct_lineage_event,
     construct_lineage_events,
     construct_test_events,
@@ -285,7 +289,7 @@ class TestGroupTestsByDataset:
             - status (pass/fail)
             - failures count
             - message (if present)
-            - timing information
+            - execution_time_seconds (for durationMs in assertions)
 
         This metadata is needed for constructing OpenLineage assertions.
         """
@@ -298,6 +302,9 @@ class TestGroupTestsByDataset:
             # Required fields for assertion construction
             assert "unique_id" in test, "unique_id needed to lookup test in manifest"
             assert "status" in test, "status needed for assertion.success"
+            assert (
+                "execution_time_seconds" in test
+            ), "execution_time_seconds needed for durationMs"
 
             # Optional but common fields
             # Note: failures might be 0 or None for passing tests
@@ -341,7 +348,7 @@ class TestCreateWrappingEvent:
         assert event.job.name == "dbt_test"
         assert len(event.inputs) == 0
         assert len(event.outputs) == 0
-        assert "correlator-io/dbt-correlator" in event.producer
+        assert "correlator-io/correlator-dbt" in event.producer
 
     def test_complete_event(self) -> None:
         """Test creation of COMPLETE wrapping event.
@@ -395,6 +402,74 @@ class TestCreateWrappingEvent:
         assert len(event.inputs) == 0
         assert len(event.outputs) == 0
 
+    def test_wrapping_event_includes_parent_facet(self) -> None:
+        """Test wrapping event has ParentRunFacet when parent params provided."""
+        run_id = str(uuid.uuid4())
+        timestamp = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+        event = create_wrapping_event(
+            event_type="START",
+            run_id=run_id,
+            job_name="jaffle_shop.test",
+            job_namespace="dbt://demo",
+            timestamp=timestamp,
+            parent=ParentRunMetadata(
+                run_id="550e8400-e29b-41d4-a716-446655440000",
+                job_namespace="airflow",
+                job_name="demo_pipeline.dbt_test",
+            ),
+        )
+
+        assert event.run.facets is not None
+        assert "parent" in event.run.facets
+        parent = event.run.facets["parent"]
+        assert parent.run.runId == "550e8400-e29b-41d4-a716-446655440000"
+        assert parent.job.namespace == "airflow"
+        assert parent.job.name == "demo_pipeline.dbt_test"
+
+    def test_wrapping_event_includes_parent_and_root(self) -> None:
+        """Test wrapping event has both parent and root when all params provided."""
+        run_id = str(uuid.uuid4())
+        timestamp = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+        event = create_wrapping_event(
+            event_type="START",
+            run_id=run_id,
+            job_name="jaffle_shop.test",
+            job_namespace="dbt://demo",
+            timestamp=timestamp,
+            parent=ParentRunMetadata(
+                run_id="550e8400-e29b-41d4-a716-446655440000",
+                job_namespace="airflow",
+                job_name="demo_pipeline.dbt_test",
+                root_run_id="660f9500-f30c-52e5-b827-557766551111",
+                root_job_namespace="airflow",
+                root_job_name="demo_pipeline",
+            ),
+        )
+
+        assert event.run.facets is not None
+        parent = event.run.facets["parent"]
+        assert parent.run.runId == "550e8400-e29b-41d4-a716-446655440000"
+        assert parent.root is not None
+        assert parent.root.run.runId == "660f9500-f30c-52e5-b827-557766551111"
+        assert parent.root.job.name == "demo_pipeline"
+
+    def test_wrapping_event_no_parent_when_standalone(self) -> None:
+        """Test wrapping event has no ParentRunFacet when running standalone."""
+        run_id = str(uuid.uuid4())
+        timestamp = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+        event = create_wrapping_event(
+            event_type="START",
+            run_id=run_id,
+            job_name="jaffle_shop.test",
+            job_namespace="dbt://demo",
+            timestamp=timestamp,
+        )
+
+        assert event.run.facets is None or "parent" not in event.run.facets
+
 
 # ============================================================================
 # Tests for construct_test_events()
@@ -411,17 +486,18 @@ class TestConstructTestEvents:
         """Test construction of valid OpenLineage RunEvent.
 
         Validates that:
-            - Returns RunEvent object (or dict with RunEvent structure)
-            - eventType is "COMPLETE"
-            - run.runId matches invocation_id from run_results
-            - job namespace and name are set correctly
-            - producer is "https://github.com/correlator-io/dbt-correlator/..."
+            - Returns single RunEvent (consolidated pattern)
+            - eventType is "RUNNING" (intermediate event, not terminal)
+            - run.runId matches provided run_id
+            - job namespace and name are set correctly (no dataset suffix)
+            - producer is "https://github.com/correlator-io/correlator-dbt/..."
             - schemaURL points to OpenLineage spec
-            - inputs array contains datasets
+            - inputs array contains multiple datasets with tests
             - outputs array is empty (tests validate inputs, not produce outputs)
 
         Note:
-            Implementation will use openlineage-python client types.
+            Implementation uses consolidated pattern: single event with all
+            test results across multiple input datasets.
         """
         events = construct_test_events(
             run_results=sample_run_results,
@@ -430,16 +506,21 @@ class TestConstructTestEvents:
             job_name="dbt_test_run",
             run_id=sample_run_results.metadata.invocation_id,
         )
-        event = events[0]  # Extract first event for testing
+
+        # Consolidated pattern: single event with multiple inputs
+        assert len(events) == 1, "Should return single consolidated event"
+        event = events[0]
 
         # Check event structure (always RunEvent object)
-        assert event.eventType == RunState.COMPLETE
+        # Test events use RUNNING state (intermediate), not COMPLETE (terminal)
+        assert event.eventType == RunState.RUNNING
         assert event.run.runId == sample_run_results.metadata.invocation_id
         assert event.job.namespace == "dbt"
+        # Job name is NOT suffixed with dataset name (consolidated pattern)
         assert event.job.name == "dbt_test_run"
-        assert "correlator-io/dbt-correlator" in event.producer
+        assert "correlator-io/correlator-dbt" in event.producer
         assert isinstance(event.inputs, list)
-        assert len(event.inputs) > 0  # Should have datasets with tests
+        assert len(event.inputs) > 0  # Should have multiple datasets with tests
         assert isinstance(event.outputs, list)
         assert len(event.outputs) == 0  # Tests don't produce outputs
 
@@ -449,8 +530,9 @@ class TestConstructTestEvents:
         """Test that datasets include dataQualityAssertions facet.
 
         Validates that:
-            - Each input dataset has facets dictionary
-            - facets contains "dataQualityAssertions" key
+            - Single event contains multiple input datasets
+            - Each input dataset has inputFacets dictionary
+            - inputFacets contains "dataQualityAssertions" key
             - dataQualityAssertions has "assertions" array
             - Each assertion has required fields: assertion, success
 
@@ -464,29 +546,31 @@ class TestConstructTestEvents:
             job_name="dbt_test_run",
             run_id="8b09d9b8-6506-438a-89ab-a51da1f0d891",
         )
-        event = events[0]  # Extract first event for testing
 
-        # Access inputs (always RunEvent object)
+        # Consolidated pattern: single event
+        assert len(events) == 1
+        event = events[0]
+
+        # Multiple inputs (one per dataset with tests)
         assert len(event.inputs) > 0
 
-        # Check first dataset has dataQualityAssertions facet
-        first_dataset = event.inputs[0]
+        # Check each dataset has dataQualityAssertions facet
+        for dataset in event.inputs:
+            # DataQualityAssertions is an InputDatasetFacet, so check inputFacets
+            assert (
+                "dataQualityAssertions" in dataset.inputFacets
+            ), f"Missing dataQualityAssertions facet for {dataset.name}"
 
-        # DataQualityAssertions is an InputDatasetFacet, so check inputFacets not facets
-        assert (
-            "dataQualityAssertions" in first_dataset.inputFacets
-        ), "Missing dataQualityAssertions facet"
+            dqa_facet = dataset.inputFacets["dataQualityAssertions"]
 
-        dqa_facet = first_dataset.inputFacets["dataQualityAssertions"]
+            # Check facet structure
+            assert isinstance(dqa_facet.assertions, list)
+            assert len(dqa_facet.assertions) > 0
 
-        # Check facet structure
-        assert isinstance(dqa_facet.assertions, list)
-        assert len(dqa_facet.assertions) > 0
-
-        # Check first assertion has required fields
-        first_assertion = dqa_facet.assertions[0]
-        assert isinstance(first_assertion.assertion, str)
-        assert isinstance(first_assertion.success, bool)
+            # Check first assertion has required fields
+            first_assertion = dqa_facet.assertions[0]
+            assert isinstance(first_assertion.assertion, str)
+            assert isinstance(first_assertion.success, bool)
 
     def test_assertion_structure_for_passed_test(
         self, sample_run_results, sample_manifest
@@ -497,8 +581,6 @@ class TestConstructTestEvents:
             - success: True
             - assertion: test name (e.g., "not_null", "unique")
             - column: column name (if applicable)
-            - failedCount: 0 or None
-            - message: None or success message
         """
         events = construct_test_events(
             run_results=sample_run_results,
@@ -507,9 +589,12 @@ class TestConstructTestEvents:
             job_name="dbt_test_run",
             run_id="8b09d9b8-6506-438a-89ab-a51da1f0d891",
         )
-        event = events[0]  # Extract first event for testing
 
-        # Find a passing test assertion
+        # Consolidated pattern: single event
+        assert len(events) == 1
+        event = events[0]
+
+        # Find a passing test assertion across all inputs
         passing_assertion = None
         for dataset in event.inputs:
             dqa_facet = dataset.inputFacets.get("dataQualityAssertions")
@@ -547,7 +632,10 @@ class TestConstructTestEvents:
             job_name="dbt_test_run",
             run_id="8b09d9b8-6506-438a-89ab-a51da1f0d891",
         )
-        event = events[0]  # Extract first event for testing
+
+        # Consolidated pattern: single event
+        assert len(events) == 1
+        event = events[0]
 
         # Get expected timestamp from run_results
         expected_time = sample_run_results.metadata.generated_at
@@ -571,11 +659,11 @@ class TestConstructTestEvents:
     def test_uses_invocation_id_as_run_id(
         self, sample_run_results, sample_manifest
     ) -> None:
-        """Test that run.runId uses dbt invocation_id.
+        """Test that run.runId uses provided run_id parameter.
 
         Validates that:
-            - run.runId matches run_results.metadata.invocation_id
-            - Critical for correlation - Correlator creates canonical ID: dbt:{invocation_id}
+            - run.runId matches the provided run_id parameter
+            - Critical for correlation - Correlator creates canonical ID: dbt:{runId}
             - Enables linking test results to job runs in Correlator
 
         Note:
@@ -597,7 +685,10 @@ class TestConstructTestEvents:
             job_name="dbt_test_run",
             run_id=sample_run_results.metadata.invocation_id,
         )
-        event = events[0]  # Extract first event for testing
+
+        # Consolidated pattern: single event
+        assert len(events) == 1
+        event = events[0]
 
         # Get expected runId from run_results
         expected_run_id = sample_run_results.metadata.invocation_id
@@ -608,7 +699,7 @@ class TestConstructTestEvents:
         # Validate runId matches invocation_id
         assert (
             actual_run_id == expected_run_id
-        ), "run.runId should be invocation_id from run_results for correlation"
+        ), "run.runId should match provided run_id for correlation"
 
         # Validate runId is a valid UUID string or format
         assert isinstance(actual_run_id, str), "runId should be string"
@@ -619,8 +710,7 @@ class TestConstructTestEvents:
 
         Validates that:
             - Namespace parameter is respected
-            - Job name parameter is respected
-            - Different combinations work correctly
+            - Job name parameter is respected (no dataset suffix in consolidated pattern)
         """
         # Create minimal test data
         run_results = RunResults(
@@ -674,10 +764,14 @@ class TestConstructTestEvents:
             job_name="nightly_dbt_tests",
             run_id="8b09d9b8-6506-438a-89ab-a51da1f0d891",
         )
-        event = events[0]  # Extract first event for testing
+
+        # Consolidated pattern: single event
+        assert len(events) == 1
+        event = events[0]
 
         # Verify custom values used (always RunEvent object)
         assert event.job.namespace == "production"
+        # Job name is NOT suffixed with dataset name (consolidated pattern)
         assert event.job.name == "nightly_dbt_tests"
 
     def test_serializes_to_json(self, sample_run_results, sample_manifest) -> None:
@@ -699,7 +793,10 @@ class TestConstructTestEvents:
             job_name="dbt_test_run",
             run_id="8b09d9b8-6506-438a-89ab-a51da1f0d891",
         )
-        event = events[0]  # Extract first event for testing
+
+        # Consolidated pattern: single event
+        assert len(events) == 1
+        event = events[0]
 
         # Try to serialize to JSON
         # v2 events use attrs, so use attr.asdict()
@@ -717,6 +814,37 @@ class TestConstructTestEvents:
         assert "outputs" in parsed
         assert "producer" in parsed
         assert "schemaURL" in parsed
+
+    def test_construct_test_events_uses_running_state(
+        self, sample_run_results, sample_manifest
+    ) -> None:
+        """Test that test events use RUNNING state, not COMPLETE.
+
+        RUNNING is the correct state for intermediate events that carry data
+        (like dataQualityAssertions) during a job run. COMPLETE/FAIL are
+        terminal states that should only be used for the final wrapping event.
+
+        This prevents state transition errors in Correlator:
+        "terminal state is immutable: COMPLETE → FAIL"
+
+        Reference:
+            OpenLineage Run Cycle: https://openlineage.io/docs/spec/run-cycle
+        """
+        events = construct_test_events(
+            run_results=sample_run_results,
+            manifest=sample_manifest,
+            job_namespace="dbt",
+            job_name="dbt_test_run",
+            run_id="550e8400-e29b-41d4-a716-446655440000",
+        )
+
+        # Consolidated pattern: single event with RUNNING state
+        assert len(events) == 1
+        event = events[0]
+        assert event.eventType == RunState.RUNNING, (
+            f"Test events should use RUNNING state, not {event.eventType}. "
+            "COMPLETE/FAIL are terminal states reserved for wrapping events."
+        )
 
 
 # ============================================================================
@@ -1115,15 +1243,20 @@ class TestEmitEventsIntegration:
 class TestConstructLineageEvent:
     """Tests for constructing lineage events for a single model."""
 
-    def test_creates_complete_event(self, sample_model_lineage) -> None:
-        """Test that construct_lineage_event creates valid OpenLineage COMPLETE event.
+    def test_creates_running_event(self, sample_model_lineage) -> None:
+        """Test that construct_lineage_event creates valid OpenLineage RUNNING event.
 
         Validates that:
-            - eventType is COMPLETE
+            - eventType is RUNNING (intermediate event, not terminal)
             - run.runId matches provided run_id
             - job namespace and name are set correctly
             - producer is set to dbt-correlator
             - Event structure is valid OpenLineage RunEvent
+
+        Note:
+            Lineage events use RUNNING state because they are intermediate
+            data carriers. COMPLETE/FAIL are terminal states reserved for
+            wrapping events.
         """
         run_id = "550e8400-e29b-41d4-a716-446655440000"
         event_time = "2024-01-01T12:00:00Z"
@@ -1132,17 +1265,18 @@ class TestConstructLineageEvent:
             model_lineage=sample_model_lineage,
             run_id=run_id,
             job_namespace="dbt",
-            producer="https://github.com/correlator-io/dbt-correlator/0.1.0",
+            producer="https://github.com/correlator-io/correlator-dbt/0.1.0",
             event_time=event_time,
         )
 
         # Verify event structure
-        assert event.eventType == RunState.COMPLETE
+        # Lineage events use RUNNING state (intermediate), not COMPLETE (terminal)
+        assert event.eventType == RunState.RUNNING
         assert event.run.runId == run_id
         assert event.job.namespace == "dbt"
         assert event.job.name == "model.jaffle_shop.customers"
         assert event.eventTime == event_time
-        assert "correlator-io/dbt-correlator" in event.producer
+        assert "correlator-io/correlator-dbt" in event.producer
 
     def test_includes_inputs(self, sample_model_lineage) -> None:
         """Test that lineage event includes input datasets from ModelLineage.
@@ -1289,7 +1423,7 @@ class TestConstructLineageEvent:
             model_lineage=sample_model_lineage,
             run_id="550e8400-e29b-41d4-a716-446655440005",
             job_namespace="dbt",
-            producer="https://github.com/correlator-io/dbt-correlator/0.1.0",
+            producer="https://github.com/correlator-io/correlator-dbt/0.1.0",
             event_time="2024-01-01T12:00:00Z",
             execution_result=sample_model_execution_result,
         )
@@ -1323,6 +1457,33 @@ class TestConstructLineageEvent:
         stats = output["outputFacets"]["outputStatistics"]
         assert stats["rowCount"] == 1500
 
+    def test_construct_lineage_event_uses_running_state(
+        self, sample_model_lineage
+    ) -> None:
+        """Test that lineage events use RUNNING state, not COMPLETE.
+
+        Lineage events are intermediate updates during a job run.
+        The terminal state (COMPLETE/FAIL) is determined by the wrapping event.
+
+        This prevents state transition errors in Correlator:
+        "terminal state is immutable: COMPLETE → FAIL"
+
+        Reference:
+            OpenLineage Run Cycle: https://openlineage.io/docs/spec/run-cycle
+        """
+        event = construct_lineage_event(
+            model_lineage=sample_model_lineage,
+            run_id="550e8400-e29b-41d4-a716-446655440008",
+            job_namespace="dbt",
+            producer="https://test/producer",
+            event_time="2024-01-01T12:00:00Z",
+        )
+
+        assert event.eventType == RunState.RUNNING, (
+            f"Lineage events should use RUNNING state, not {event.eventType}. "
+            "COMPLETE/FAIL are terminal states reserved for wrapping events."
+        )
+
 
 # ============================================================================
 # Tests for construct_lineage_events()
@@ -1337,13 +1498,12 @@ class TestConstructLineageEvents:
         """Test that construct_lineage_events creates one event per model.
 
         Validates that:
-            - Returns list of RunEvents
+            - Returns list of events
             - Event count matches input model count
             - Each event corresponds to a model from input list
         """
         events = construct_lineage_events(
             model_lineages=sample_model_lineages,
-            run_id="550e8400-e29b-41d4-a716-446655440003",
             job_namespace="dbt",
             producer="https://test/producer",
             event_time="2024-01-01T12:00:00Z",
@@ -1357,26 +1517,33 @@ class TestConstructLineageEvents:
         assert "model.jaffle_shop.stg_customers" in job_names
         assert "model.jaffle_shop.customers" in job_names
 
-    def test_all_share_same_run_id(self, sample_model_lineages) -> None:
-        """Test that all lineage events share the same run_id.
+    def test_each_model_gets_unique_run_id(self, sample_model_lineages) -> None:
+        """Test that each model gets a UNIQUE runId (Bug 4 fix).
 
         Validates that:
-            - All events have identical run.runId
-            - Critical for correlation in Correlator
-        """
-        run_id = "550e8400-e29b-41d4-a716-446655440004"
+            - Each model event has a different runId
+            - Prevents Correlator from aggregating events into self-referential loops
 
+        Bug 4 Fix:
+            Previously all events shared a single runId. Correlator aggregates
+            by runId, creating loops when the same dataset appears as both
+            input and output across different models.
+        """
         events = construct_lineage_events(
             model_lineages=sample_model_lineages,
-            run_id=run_id,
             job_namespace="dbt",
             producer="https://test/producer",
             event_time="2024-01-01T12:00:00Z",
         )
 
-        # All events should share the same runId
-        for event in events:
-            assert event.run.runId == run_id
+        # Collect all runIds from events
+        run_ids = {event.run.runId for event in events}
+
+        # Each model should have a unique runId
+        assert len(run_ids) == len(events), (
+            "Each model must have a unique runId to prevent Correlator aggregation. "
+            f"Found {len(run_ids)} unique runIds for {len(events)} events."
+        )
 
     def test_with_execution_results(self, sample_model_lineages) -> None:
         """Test that execution results are matched to correct models.
@@ -1399,7 +1566,6 @@ class TestConstructLineageEvents:
 
         events = construct_lineage_events(
             model_lineages=sample_model_lineages,
-            run_id="550e8400-e29b-41d4-a716-446655440002",
             job_namespace="dbt",
             producer="https://test/producer",
             event_time="2024-01-01T12:00:00Z",
@@ -1437,13 +1603,37 @@ class TestConstructLineageEvents:
         """
         events = construct_lineage_events(
             model_lineages=[],
-            run_id="550e8400-e29b-41d4-a716-446655440002",
             job_namespace="dbt",
             producer="https://test/producer",
             event_time="2024-01-01T12:00:00Z",
         )
 
         assert events == []
+
+    def test_construct_lineage_events_all_use_running_state(
+        self, sample_model_lineages
+    ) -> None:
+        """Test that all lineage events use RUNNING state, not COMPLETE.
+
+        Validates that construct_lineage_events() produces RUNNING events
+        for all models in the batch. Critical for state machine correctness.
+
+        Reference:
+            OpenLineage Run Cycle: https://openlineage.io/docs/spec/run-cycle
+        """
+        events = construct_lineage_events(
+            model_lineages=sample_model_lineages,
+            job_namespace="dbt",
+            producer="https://test/producer",
+            event_time="2024-01-01T12:00:00Z",
+        )
+
+        # All lineage events should use RUNNING state
+        for event in events:
+            assert event.eventType == RunState.RUNNING, (
+                f"Lineage events should use RUNNING state, not {event.eventType}. "
+                "COMPLETE/FAIL are terminal states reserved for wrapping events."
+            )
 
 
 # ============================================================================
@@ -1573,7 +1763,7 @@ class TestEmitEventsOpenLineageConsumerCompatibility:
             model_lineage=sample_model_lineage,
             run_id="550e8400-e29b-41d4-a716-446655440006",
             job_namespace="dbt",
-            producer="https://github.com/correlator-io/dbt-correlator/0.1.0",
+            producer="https://github.com/correlator-io/correlator-dbt/0.1.0",
             event_time="2024-01-01T12:00:00Z",
             execution_result=execution_result,
         )
@@ -1602,7 +1792,8 @@ class TestEmitEventsOpenLineageConsumerCompatibility:
 
             # Verify lineage event structure in request body
             event_data = json_data[0]
-            assert event_data["eventType"] == "COMPLETE"
+            # Lineage events use RUNNING state (intermediate), not COMPLETE (terminal)
+            assert event_data["eventType"] == "RUNNING"
             assert len(event_data["outputs"]) == 1
             assert event_data["outputs"][0]["namespace"] == "duckdb://jaffle_shop"
             assert event_data["outputs"][0]["name"] == "main.customers"
@@ -1611,3 +1802,562 @@ class TestEmitEventsOpenLineageConsumerCompatibility:
             output_facets = event_data["outputs"][0].get("outputFacets", {})
             assert "outputStatistics" in output_facets
             assert output_facets["outputStatistics"]["rowCount"] == 1000
+
+
+@pytest.mark.unit
+class TestBuildParentFacet:
+    """Tests for _build_parent_facet() helper function.
+
+    Validates ParentRunFacet construction using OpenLineage SDK classes,
+    including UUID validation and automatic metadata population.
+    """
+
+    def test_valid_uuid_produces_correct_structure(self) -> None:
+        """Test that valid UUID produces correct ParentRunFacet structure.
+
+        Validates that:
+            - ParentRunFacet is created with correct run.runId
+            - Parent job has correct namespace and name
+            - Producer is set correctly
+        """
+        facet = _build_parent_facet(
+            parent=ParentRunMetadata(
+                run_id="550e8400-e29b-41d4-a716-446655440000",
+                job_namespace="dbt://demo",
+                job_name="jaffle_shop.build",
+            ),
+            producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
+        )
+
+        assert facet.run.runId == "550e8400-e29b-41d4-a716-446655440000"
+        assert facet.job.namespace == "dbt://demo"
+        assert facet.job.name == "jaffle_shop.build"
+
+    def test_invalid_uuid_raises_value_error(self) -> None:
+        """Test that invalid UUID raises ValueError from SDK validation.
+
+        The OpenLineage SDK validates runId is a valid UUID format.
+        Invalid UUIDs should fail fast during construction.
+        """
+        with pytest.raises(ValueError, match="badly formed"):
+            _build_parent_facet(
+                parent=ParentRunMetadata(
+                    run_id="not-a-valid-uuid",
+                    job_namespace="dbt://demo",
+                    job_name="jaffle_shop.build",
+                ),
+                producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
+            )
+
+    def test_serialization_includes_metadata_fields(self) -> None:
+        """Test that serialized facet includes _producer, _schemaURL, root.
+
+        OpenLineage SDK automatically populates facet metadata:
+            - _producer: From constructor argument
+            - _schemaURL: Auto-set to correct spec version
+            - root: Optional field, serializes as null if not set
+        """
+        facet = _build_parent_facet(
+            parent=ParentRunMetadata(
+                run_id="550e8400-e29b-41d4-a716-446655440000",
+                job_namespace="dbt://demo",
+                job_name="jaffle_shop.build",
+            ),
+            producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
+        )
+
+        # Serialize to dict
+        def serialize(inst, field, value):
+            if isinstance(value, Enum):
+                return value.value
+            return value
+
+        facet_dict = attr.asdict(facet, value_serializer=serialize)  # type: ignore[call-arg]
+
+        # Check metadata fields
+        assert (
+            facet_dict["_producer"]
+            == "https://github.com/correlator-io/correlator-dbt/0.1.2"
+        )
+        assert "_schemaURL" in facet_dict
+        assert "ParentRunFacet" in facet_dict["_schemaURL"]
+        # root is optional, serializes as None/null
+        assert "root" in facet_dict
+
+    def test_schema_url_matches_openlineage_spec(self) -> None:
+        """Test that _schemaURL matches OpenLineage spec version 1-1-0.
+
+        The SDK should auto-set schema URL to:
+        https://openlineage.io/spec/facets/1-1-0/ParentRunFacet.json#/$defs/ParentRunFacet
+        """
+        facet = _build_parent_facet(
+            parent=ParentRunMetadata(
+                run_id="550e8400-e29b-41d4-a716-446655440000",
+                job_namespace="dbt://demo",
+                job_name="jaffle_shop.build",
+            ),
+            producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
+        )
+
+        def serialize(inst, field, value):
+            if isinstance(value, Enum):
+                return value.value
+            return value
+
+        facet_dict = attr.asdict(facet, value_serializer=serialize)  # type: ignore[call-arg]
+
+        expected_url = "https://openlineage.io/spec/facets/1-1-0/ParentRunFacet.json"
+        assert expected_url in facet_dict["_schemaURL"]
+
+    def test_root_included_when_all_root_params_provided(self) -> None:
+        """Test that Root is included in facet when all root params are provided."""
+        facet = _build_parent_facet(
+            parent=ParentRunMetadata(
+                run_id="550e8400-e29b-41d4-a716-446655440000",
+                job_namespace="airflow",
+                job_name="demo_pipeline.dbt_test",
+                root_run_id="660f9500-f30c-52e5-b827-557766551111",
+                root_job_namespace="airflow",
+                root_job_name="demo_pipeline",
+            ),
+            producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
+        )
+
+        assert facet.root is not None
+        assert facet.root.run.runId == "660f9500-f30c-52e5-b827-557766551111"
+        assert facet.root.job.namespace == "airflow"
+        assert facet.root.job.name == "demo_pipeline"
+
+    def test_root_not_included_when_root_params_none(self) -> None:
+        """Test that Root is None when no root params are provided (default)."""
+        facet = _build_parent_facet(
+            parent=ParentRunMetadata(
+                run_id="550e8400-e29b-41d4-a716-446655440000",
+                job_namespace="dbt://demo",
+                job_name="jaffle_shop.build",
+            ),
+            producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
+        )
+
+        assert facet.root is None
+
+    def test_root_not_included_when_partial_root_params(self) -> None:
+        """Test that Root is None when only some root params are provided."""
+        facet = _build_parent_facet(
+            parent=ParentRunMetadata(
+                run_id="550e8400-e29b-41d4-a716-446655440000",
+                job_namespace="dbt://demo",
+                job_name="jaffle_shop.build",
+                root_run_id="660f9500-f30c-52e5-b827-557766551111",
+                # root_job_namespace and root_job_name default to None
+            ),
+            producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
+        )
+
+        assert facet.root is None
+
+    def test_root_serializes_correctly(self) -> None:
+        """Test that root section serializes with correct structure."""
+        facet = _build_parent_facet(
+            parent=ParentRunMetadata(
+                run_id="550e8400-e29b-41d4-a716-446655440000",
+                job_namespace="airflow",
+                job_name="demo_pipeline.dbt_test",
+                root_run_id="660f9500-f30c-52e5-b827-557766551111",
+                root_job_namespace="airflow",
+                root_job_name="demo_pipeline",
+            ),
+            producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
+        )
+
+        def serialize(inst, field, value):
+            if isinstance(value, Enum):
+                return value.value
+            return value
+
+        facet_dict = attr.asdict(facet, value_serializer=serialize)  # type: ignore[call-arg]
+
+        assert facet_dict["root"] is not None
+        assert (
+            facet_dict["root"]["run"]["runId"] == "660f9500-f30c-52e5-b827-557766551111"
+        )
+        assert facet_dict["root"]["job"]["namespace"] == "airflow"
+        assert facet_dict["root"]["job"]["name"] == "demo_pipeline"
+
+    def test_root_invalid_uuid_raises_value_error(self) -> None:
+        """Test that invalid root UUID raises ValueError from SDK validation."""
+        with pytest.raises(ValueError, match="badly formed"):
+            _build_parent_facet(
+                parent=ParentRunMetadata(
+                    run_id="550e8400-e29b-41d4-a716-446655440000",
+                    job_namespace="airflow",
+                    job_name="demo_pipeline.dbt_test",
+                    root_run_id="not-a-valid-uuid",
+                    root_job_namespace="airflow",
+                    root_job_name="demo_pipeline",
+                ),
+                producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
+            )
+
+
+@pytest.mark.unit
+class TestConstructLineageEventWithParent:
+    """Tests for construct_lineage_event() with ParentRunFacet.
+
+    Validates that parent facet is correctly added to lineage events
+    when parent parameters are provided.
+    """
+
+    @pytest.fixture
+    def sample_model_lineage(self) -> ModelLineage:
+        """Create sample ModelLineage for testing."""
+        return ModelLineage(
+            unique_id="model.jaffle_shop.customers",
+            name="customers",
+            inputs=[
+                DatasetInfo(
+                    namespace="duckdb://jaffle_shop", name="main.stg_customers"
+                ),
+            ],
+            output=DatasetInfo(namespace="duckdb://jaffle_shop", name="main.customers"),
+        )
+
+    def test_parent_facet_included_when_all_params_provided(
+        self, sample_model_lineage
+    ) -> None:
+        """Test that ParentRunFacet is included when all parent params provided.
+
+        Validates that:
+            - run.facets contains "parent" key
+            - Parent facet has correct structure
+        """
+        event = construct_lineage_event(
+            model_lineage=sample_model_lineage,
+            run_id="660f9500-f30c-52e5-b827-557766551111",
+            job_namespace="dbt://demo",
+            producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
+            event_time="2024-01-01T12:00:00Z",
+            parent=ParentRunMetadata(
+                run_id="550e8400-e29b-41d4-a716-446655440000",
+                job_namespace="dbt://demo",
+                job_name="jaffle_shop.build",
+            ),
+        )
+
+        assert event.run.facets is not None
+        assert "parent" in event.run.facets
+
+        parent_facet = event.run.facets["parent"]
+        assert parent_facet.run.runId == "550e8400-e29b-41d4-a716-446655440000"
+        assert parent_facet.job.namespace == "dbt://demo"
+        assert parent_facet.job.name == "jaffle_shop.build"
+
+    def test_parent_facet_not_included_when_params_none(
+        self, sample_model_lineage
+    ) -> None:
+        """Test that ParentRunFacet is NOT included when params are None.
+
+        Validates backward compatibility - events without parent params
+        should not have run.facets set.
+        """
+        event = construct_lineage_event(
+            model_lineage=sample_model_lineage,
+            run_id="660f9500-f30c-52e5-b827-557766551111",
+            job_namespace="dbt://demo",
+            producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
+            event_time="2024-01-01T12:00:00Z",
+            # No parent params
+        )
+
+        # run.facets should be None or empty
+        assert event.run.facets is None or len(event.run.facets) == 0
+
+    def test_parent_facet_serializes_correctly(self, sample_model_lineage) -> None:
+        """Test that event with parent facet serializes to correct JSON structure.
+
+        Validates the full serialization path for events with ParentRunFacet.
+        """
+        event = construct_lineage_event(
+            model_lineage=sample_model_lineage,
+            run_id="660f9500-f30c-52e5-b827-557766551111",
+            job_namespace="dbt://demo",
+            producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
+            event_time="2024-01-01T12:00:00Z",
+            parent=ParentRunMetadata(
+                run_id="550e8400-e29b-41d4-a716-446655440000",
+                job_namespace="dbt://demo",
+                job_name="jaffle_shop.build",
+            ),
+        )
+
+        # Serialize event
+        def serialize(inst, field, value):
+            if isinstance(value, Enum):
+                return value.value
+            return value
+
+        event_dict = attr.asdict(event, value_serializer=serialize)  # type: ignore[call-arg]
+
+        # Verify JSON structure
+        assert "run" in event_dict
+        assert "facets" in event_dict["run"]
+        assert "parent" in event_dict["run"]["facets"]
+
+        parent = event_dict["run"]["facets"]["parent"]
+        assert parent["run"]["runId"] == "550e8400-e29b-41d4-a716-446655440000"
+        assert parent["job"]["namespace"] == "dbt://demo"
+        assert parent["job"]["name"] == "jaffle_shop.build"
+        assert "_producer" in parent
+        assert "_schemaURL" in parent
+
+
+@pytest.mark.unit
+class TestConstructLineageEventsWithParent:
+    """Tests for construct_lineage_events() with ParentRunFacet.
+
+    Validates that parent params are correctly passed to all model events.
+    """
+
+    @pytest.fixture
+    def sample_model_lineages(self) -> list[ModelLineage]:
+        """Create sample ModelLineage list for testing."""
+        return [
+            ModelLineage(
+                unique_id="model.jaffle_shop.stg_customers",
+                name="stg_customers",
+                inputs=[
+                    DatasetInfo(
+                        namespace="duckdb://jaffle_shop", name="main.raw_customers"
+                    ),
+                ],
+                output=DatasetInfo(
+                    namespace="duckdb://jaffle_shop", name="main.stg_customers"
+                ),
+            ),
+            ModelLineage(
+                unique_id="model.jaffle_shop.customers",
+                name="customers",
+                inputs=[
+                    DatasetInfo(
+                        namespace="duckdb://jaffle_shop", name="main.stg_customers"
+                    ),
+                ],
+                output=DatasetInfo(
+                    namespace="duckdb://jaffle_shop", name="main.customers"
+                ),
+            ),
+        ]
+
+    def test_all_events_have_parent_facet(self, sample_model_lineages) -> None:
+        """Test that all generated events have ParentRunFacet.
+
+        Validates that parent params are propagated to all model events.
+        """
+        events = construct_lineage_events(
+            model_lineages=sample_model_lineages,
+            job_namespace="dbt://demo",
+            producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
+            event_time="2024-01-01T12:00:00Z",
+            parent=ParentRunMetadata(
+                run_id="550e8400-e29b-41d4-a716-446655440000",
+                job_namespace="dbt://demo",
+                job_name="jaffle_shop.build",
+            ),
+        )
+
+        assert len(events) == 2
+
+        for event in events:
+            assert event.run.facets is not None
+            assert "parent" in event.run.facets
+            assert (
+                event.run.facets["parent"].run.runId
+                == "550e8400-e29b-41d4-a716-446655440000"
+            )
+            assert event.run.facets["parent"].job.name == "jaffle_shop.build"
+
+    def test_no_parent_facet_when_params_none(self, sample_model_lineages) -> None:
+        """Test that no parent facet when params are None."""
+        events = construct_lineage_events(
+            model_lineages=sample_model_lineages,
+            job_namespace="dbt://demo",
+            producer="https://github.com/correlator-io/correlator-dbt/0.1.2",
+            event_time="2024-01-01T12:00:00Z",
+            # No parent params
+        )
+
+        for event in events:
+            assert event.run.facets is None or "parent" not in event.run.facets
+
+
+@pytest.mark.unit
+class TestConstructTestEventsConsolidatedPattern:
+    """Tests for construct_test_events() consolidated pattern.
+
+    Validates the new consolidated pattern:
+    - Single event with multiple inputs
+    - No ParentRunFacet (fixes self-referential parent bug)
+    - Extended fields (durationMs, message) stored for serialization
+    """
+
+    def test_returns_single_event(self, sample_run_results, sample_manifest) -> None:
+        """Test that construct_test_events returns exactly one event."""
+        events = construct_test_events(
+            run_results=sample_run_results,
+            manifest=sample_manifest,
+            job_namespace="dbt://demo",
+            job_name="jaffle_shop.test",
+            run_id="550e8400-e29b-41d4-a716-446655440000",
+        )
+
+        assert len(events) == 1, "Should return single consolidated event"
+
+    def test_multiple_inputs_per_event(
+        self, sample_run_results, sample_manifest
+    ) -> None:
+        """Test that single event contains all tested datasets as inputs."""
+        events = construct_test_events(
+            run_results=sample_run_results,
+            manifest=sample_manifest,
+            job_namespace="dbt://demo",
+            job_name="jaffle_shop.test",
+            run_id="550e8400-e29b-41d4-a716-446655440000",
+        )
+
+        assert len(events) == 1
+        event = events[0]
+
+        # Should have multiple inputs (one per dataset with tests)
+        assert len(event.inputs) > 0, "Should have at least one input dataset"
+
+    def test_no_parent_when_standalone(
+        self, sample_run_results, sample_manifest
+    ) -> None:
+        """Test that test events have no ParentRunFacet when not orchestrated."""
+        events = construct_test_events(
+            run_results=sample_run_results,
+            manifest=sample_manifest,
+            job_namespace="dbt://demo",
+            job_name="jaffle_shop.test",
+            run_id="550e8400-e29b-41d4-a716-446655440000",
+        )
+
+        assert len(events) == 1
+        event = events[0]
+        assert event.run.facets is None or "parent" not in event.run.facets
+
+    def test_includes_orchestrator_parent(
+        self, sample_run_results, sample_manifest
+    ) -> None:
+        """Test that test events include ParentRunFacet when orchestrated.
+
+        Test events share the wrapping job's identity (same run_id, job_name).
+        When orchestrated, they should carry the orchestrator as parent,
+        consistent with the wrapping event's parent.
+        """
+        orchestrator = ParentRunMetadata(
+            run_id="019c7c79-b160-7c2f-8ad4-a026c5a82b5a",
+            job_namespace="airflow",
+            job_name="demo_pipeline.dbt_test",
+            root_run_id="019c7c79-aaaa-bbbb-cccc-111122223333",
+            root_job_namespace="airflow",
+            root_job_name="demo_pipeline",
+        )
+
+        events = construct_test_events(
+            run_results=sample_run_results,
+            manifest=sample_manifest,
+            job_namespace="dbt://demo",
+            job_name="jaffle_shop.test",
+            run_id="550e8400-e29b-41d4-a716-446655440000",
+            parent=orchestrator,
+        )
+
+        assert len(events) == 1
+        event = events[0]
+        assert event.run.facets is not None
+        assert "parent" in event.run.facets
+        parent = event.run.facets["parent"]
+        assert parent.run.runId == "019c7c79-b160-7c2f-8ad4-a026c5a82b5a"
+        assert parent.job.namespace == "airflow"
+        assert parent.job.name == "demo_pipeline.dbt_test"
+        assert parent.root is not None
+        assert parent.root.run.runId == "019c7c79-aaaa-bbbb-cccc-111122223333"
+
+    def test_extended_fields_stored_on_facet(
+        self, sample_run_results, sample_manifest
+    ) -> None:
+        """Test that extended fields (durationMs, message) are stored for serialization."""
+        events = construct_test_events(
+            run_results=sample_run_results,
+            manifest=sample_manifest,
+            job_namespace="dbt://demo",
+            job_name="jaffle_shop.test",
+            run_id="550e8400-e29b-41d4-a716-446655440000",
+        )
+
+        assert len(events) == 1
+        event = events[0]
+
+        # Check that at least one input has extended fields stored
+        has_extended_fields = False
+        for inp in event.inputs:
+            dqa_facet = inp.inputFacets.get("dataQualityAssertions")
+            if dqa_facet and hasattr(dqa_facet, "_extended_fields"):
+                has_extended_fields = True
+                extended = dqa_facet._extended_fields  # type: ignore[attr-defined]
+                assert isinstance(extended, list)
+                assert len(extended) > 0
+                # Check structure of extended fields
+                for ext in extended:
+                    assert "durationMs" in ext
+                    assert "message" in ext
+                break
+
+        assert has_extended_fields, "Should have extended fields stored on facet"
+
+    def test_job_name_not_suffixed(self, sample_run_results, sample_manifest) -> None:
+        """Test that job name is NOT suffixed with dataset name."""
+        events = construct_test_events(
+            run_results=sample_run_results,
+            manifest=sample_manifest,
+            job_namespace="dbt://demo",
+            job_name="jaffle_shop.test",
+            run_id="550e8400-e29b-41d4-a716-446655440000",
+        )
+
+        assert len(events) == 1
+        event = events[0]
+
+        # Job name should be exactly as provided (no dataset suffix)
+        assert event.job.name == "jaffle_shop.test"
+
+    def test_extended_fields_serialized_correctly(
+        self, sample_run_results, sample_manifest
+    ) -> None:
+        """Test that durationMs and message appear in serialized assertions."""
+        events = construct_test_events(
+            run_results=sample_run_results,
+            manifest=sample_manifest,
+            job_namespace="dbt://demo",
+            job_name="jaffle_shop.test",
+            run_id="550e8400-e29b-41d4-a716-446655440000",
+        )
+
+        assert len(events) == 1
+        event = events[0]
+
+        # Serialize with extended fields
+        event_dict = _serialize_event_with_extended_fields(event)
+
+        # Check that extended fields are merged into assertions
+        for input_ds in event_dict["inputs"]:
+            dqa = input_ds.get("inputFacets", {}).get("dataQualityAssertions")
+            if dqa and "assertions" in dqa:
+                for assertion in dqa["assertions"]:
+                    assert (
+                        "durationMs" in assertion
+                    ), "durationMs should be in assertion"
+                    assert "message" in assertion, "message should be in assertion"
+                    # durationMs should be an integer (milliseconds)
+                    assert isinstance(assertion["durationMs"], int)
