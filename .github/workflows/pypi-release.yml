@@ -6,7 +6,7 @@ on:
       - closed
 
 permissions:
-  contents: write        # Required to push commits, tags, and create releases
+  contents: write        # Required to push tags and create releases
   pull-requests: read    # Required to read PR information
 
 jobs:
@@ -24,14 +24,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.13'
-
-      - name: Install dependencies
-        run: python -m pip install tomli
-
       - name: Determine next version
         id: determine-version
         run: |
@@ -39,26 +31,13 @@ jobs:
           branch="${{ github.event.pull_request.head.ref }}"
           echo "Branch: $branch"
 
-          # Get current version from pyproject.toml for fallback
-          cat > get_version.py << 'EOL'
-          import tomli
-
-          with open("pyproject.toml", "rb") as f:
-              data = tomli.load(f)
-              print(data["project"]["version"])
-          EOL
-
-          CURRENT_VERSION=$(python get_version.py)
-          echo "Current version in pyproject.toml: $CURRENT_VERSION"
-
           # Get latest tag
           git fetch --tags
-          # Check if any tags exist
           if git tag -l "v*" | grep -q .; then
             latest_tag=$(git tag -l "v*" | sort -V | tail -n 1)
           else
-            latest_tag="v$CURRENT_VERSION"
-            echo "No existing tags found, using current version from pyproject.toml"
+            latest_tag="v0.0.0"
+            echo "No existing tags found, starting from v0.0.0"
           fi
           echo "Latest tag: $latest_tag"
 
@@ -71,7 +50,7 @@ jobs:
 
           # Ensure we have valid numeric values
           major=${major:-0}
-          minor=${minor:-1}
+          minor=${minor:-0}
           patch=${patch:-0}
 
           echo "Current components: major=$major, minor=$minor, patch=$patch"
@@ -134,53 +113,16 @@ jobs:
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install tomli tomli-w
-
-      - name: Update version in pyproject.toml
-        run: |
-          NEW_VERSION="${{ needs.check_version.outputs.new_version }}"
-          echo "Updating pyproject.toml to version $NEW_VERSION"
-
-          # Use Python to update version in pyproject.toml
-          cat > update_version.py << 'EOL'
-          import tomli
-          import tomli_w
-          import sys
-
-          # Get new version from command line
-          new_version = sys.argv[1]
-
-          # Read pyproject.toml
-          with open("pyproject.toml", "rb") as f:
-              data = tomli.load(f)
-
-          # Update version
-          data["project"]["version"] = new_version
-
-          # Write updated data back
-          with open("pyproject.toml", "wb") as f:
-              tomli_w.dump(data, f)
-          EOL
-
-          # Update the version
-          python update_version.py "$NEW_VERSION"
-
-      - name: Commit and tag version change
+      - name: Tag release version
         run: |
           NEW_VERSION="${{ needs.check_version.outputs.new_version }}"
 
           # Check if tag already exists (handles re-run after partial failure)
           if git rev-parse "v$NEW_VERSION" >/dev/null 2>&1; then
-            echo "⚠️ Tag v$NEW_VERSION already exists, skipping commit and tag creation"
+            echo "⚠️ Tag v$NEW_VERSION already exists, skipping tag creation"
             echo "This is expected if re-running after a partial failure"
           else
-            git add pyproject.toml
-            git commit -m "chore: bump version to $NEW_VERSION [skip ci]"
             git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
-            git push
             git push --tags
             echo "✅ Created and pushed tag v$NEW_VERSION"
           fi
