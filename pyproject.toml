@@ -1,12 +1,13 @@
 [build-system]
 requires = [
     "hatchling",
+    "hatch-vcs",
 ]
 build-backend = "hatchling.build"
 
 [project]
 name = "correlator-dbt"
-version = "0.1.0"
+dynamic = ["version"]
 description = "dbt plugin that emits OpenLineage events with test results for automated incident correlation"
 readme = "README.md"
 authors = [
@@ -92,6 +93,12 @@ include = [
     "/LICENSE",
 ]
 
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/dbt_correlator/_version.py"
+
 [tool.black]
 line-length = 88
 target-version = [
@@ -102,7 +109,7 @@ target-version = [
     "py313",
 ]
 include = "\\.pyi?$"
-exclude = "/(\n    \\.eggs\n  | \\.git\n  | \\.hg\n  | \\.mypy_cache\n  | \\.tox\n  | \\.venv\n  | _build\n  | buck-out\n  | build\n  | dist\n  | venv\n  | tests/fixtures\n)/\n"
+extend-exclude = "_version\\.py"
 
 [tool.isort]
 profile = "black"
@@ -124,6 +131,7 @@ src = [
     "src",
     "tests",
 ]
+exclude = ["*/_version.py"]
 
 [tool.ruff.lint]
 select = [
